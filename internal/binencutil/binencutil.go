@@ -2,6 +2,7 @@ package binencutil
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -51,6 +52,51 @@ func WriteUint16(writer io.Writer, value uint16) error {
 	binary.LittleEndian.PutUint16(buf[:], value)
 	_, err := writer.Write(buf[:])
 	return err
+}
+
+func WriteLongString(writer io.Writer, value string) error {
+	if err := WriteUint64(writer, uint64(len(value))); err != nil {
+		return err
+	}
+	_, err := writer.Write([]byte(value))
+	return err
+}
+
+func ReadLongString(reader io.Reader) (string, error) {
+	length, err := ReadUint64(reader)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]byte, length)
+	_, err = reader.Read(buf)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func WriteShortString(writer io.Writer, value string) error {
+	if len(value) > 65535 {
+		return fmt.Errorf("string too long: %d", len(value))
+	}
+	if err := WriteUint16(writer, uint16(len(value))); err != nil {
+		return err
+	}
+	_, err := writer.Write([]byte(value))
+	return err
+}
+
+func ReadShortString(reader io.Reader) (string, error) {
+	length, err := ReadUint16(reader)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]byte, length)
+	_, err = reader.Read(buf)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 func BytesReadUint8(bytes []byte) (uint8, []byte, error) {

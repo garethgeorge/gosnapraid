@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -50,8 +51,7 @@ func TestRangeAllocator_String(t *testing.T) {
 
 	// Test allocation when there is no more space
 	start, end = allocator.Allocate(1, "eighth")
-	assert.Equal(t, int64(0), start)
-	assert.Equal(t, int64(0), end)
+	assert.True(t, end < start)
 
 	// Verify all allocations
 	var allocations []RangeAllocation[string]
@@ -108,6 +108,25 @@ func TestRangeAllocator_Free(t *testing.T) {
 	assert.Equal(t, expectedAllocations2, allocations2)
 }
 
+func TestRangeAllocator_SetAllocated(t *testing.T) {
+	allocator := NewRangeAllocator[string](0, 100)
+	assert.True(t, allocator.SetAllocated(0, 9, "first"))
+	assert.False(t, allocator.SetAllocated(0, 10, "first"))
+	assert.True(t, allocator.SetAllocated(10, 19, "second"))
+	assert.True(t, allocator.SetAllocated(20, 29, "third"))
+	assert.True(t, allocator.SetAllocated(30, 39, "fourth"))
+	assert.True(t, allocator.SetAllocated(40, 49, "fifth"))
+	assert.True(t, allocator.SetAllocated(50, 59, "sixth"))
+	assert.True(t, allocator.SetAllocated(60, 69, "seventh"))
+	assert.True(t, allocator.SetAllocated(70, 79, "eighth"))
+	assert.True(t, allocator.SetAllocated(80, 89, "ninth"))
+	assert.True(t, allocator.SetAllocated(90, 99, "tenth"))
+	assert.False(t, allocator.SetAllocated(100, 110, "eleventh"))
+	assert.False(t, allocator.SetAllocated(110, 120, "twelfth"))
+	assert.False(t, allocator.SetAllocated(-10, -1, "negative"))
+	assert.False(t, allocator.SetAllocated(50, 60, "overlap"))
+}
+
 func BenchmarkRangeAllocator_Allocate(b *testing.B) {
 	b.ReportAllocs()
 	allocator := NewRangeAllocator[string](0, 10000000)
@@ -133,4 +152,96 @@ func BenchmarkRangeAllocator_Free(b *testing.B) {
 	for _, alloc := range allocations {
 		allocator.Free(alloc.Start, alloc.End)
 	}
+}
+
+func BenchmarkRangeAllocator_Fragmented(b *testing.B) {
+	allocator := NewRangeAllocator[string](0, 10000000)
+	var allocs []RangeAllocation[string]
+	for i := 0; i < b.N; i++ {
+		allocator.Allocate(10, fmt.Sprintf("%d", i))
+		allocs = append(allocs, RangeAllocation[string]{Start: int64(i), End: int64(i) + 10, Data: fmt.Sprintf("%d", i)})
+
+		// random chance to delete an old allocation
+		if rand.Intn(100) < 50 {
+			idx := rand.Intn(len(allocs))
+			allocator.Free(allocs[idx].Start, allocs[idx].End)
+			allocs[idx] = allocs[len(allocs)-1]
+			allocs = allocs[:len(allocs)-1]
+		}
+	}
+}
+
+func FuzzRangeAllocator(f *testing.F) {
+	seedBase := int64(time.Now().UnixNano())
+
+	f.Add(int64(100), int64(100), seedBase+0)
+	f.Add(int64(1000), int64(1000), seedBase+1)
+	f.Add(int64(10000), int64(10000), seedBase+2)
+
+	f.Fuzz(func(t *testing.T, rangeSize, operationCount, seed int64) {
+
+		rng := rand.New(rand.NewSource(int64(seed)))
+		allocator := NewRangeAllocator[string](0, rangeSize)
+
+		// Track what we expect to be allocated
+		expectedAllocs := make(map[string]RangeAllocation[string])
+
+		// Perform random operations
+		for i := 0; i < int(operationCount); i++ {
+			op := rng.Intn(3) // 0=allocate, 1=free, 2=setAllocated
+
+			switch op {
+			case 0: // Allocate
+				size := rng.Int63n(rangeSize/100) + 1
+				data := fmt.Sprintf("alloc_%d", i)
+				start, end := allocator.Allocate(size, data)
+				if end >= start { // successful allocation
+					expectedAllocs[data] = RangeAllocation[string]{Start: start, End: end, Data: data}
+				}
+			case 1: // Free random allocation
+				if len(expectedAllocs) > 0 {
+					// Pick a random allocation to free
+					keys := make([]string, 0, len(expectedAllocs))
+					for k := range expectedAllocs {
+						keys = append(keys, k)
+					}
+					key := keys[rng.Intn(len(keys))]
+					alloc := expectedAllocs[key]
+					allocator.Free(alloc.Start, alloc.End)
+					delete(expectedAllocs, key)
+				}
+			case 2: // SetAllocated
+				start := rng.Int63n(rangeSize)
+				size := rng.Int63n(rangeSize/10) + 1
+				end := start + size - 1
+				if end >= rangeSize {
+					end = rangeSize - 1
+				}
+				data := fmt.Sprintf("set_%d", i)
+				if allocator.SetAllocated(start, end, data) {
+					expectedAllocs[data] = RangeAllocation[string]{Start: start, End: end, Data: data}
+				}
+			}
+
+			// Verify allocator state matches expected state
+			actualAllocs := make(map[string]RangeAllocation[string])
+			for alloc := range allocator.AllocationIter() {
+				actualAllocs[alloc.Data] = alloc
+			}
+
+			if len(expectedAllocs) != len(actualAllocs) {
+				t.Fatalf("Length mismatch: expected %d allocations, got %d", len(expectedAllocs), len(actualAllocs))
+			}
+
+			for key, expected := range expectedAllocs {
+				actual, exists := actualAllocs[key]
+				if !exists {
+					t.Fatalf("Missing allocation: %v", expected)
+				}
+				if actual != expected {
+					t.Fatalf("Allocation mismatch for key %s: expected %v, got %v", key, expected, actual)
+				}
+			}
+		}
+	})
 }

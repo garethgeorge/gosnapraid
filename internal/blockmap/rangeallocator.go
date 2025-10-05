@@ -10,9 +10,17 @@ type RangeAllocation[T any] struct {
 	Data  T
 }
 
+func (r RangeAllocation[T]) Overlaps(other RangeAllocation[T]) bool {
+	return r.Start <= other.End && other.Start <= r.End
+}
+
 type freeRange struct {
 	Start int64
 	End   int64
+}
+
+func (r freeRange) Overlaps(other freeRange) bool {
+	return r.Start <= other.End && other.Start <= r.End
 }
 
 type RangeAllocator[T any] struct {
@@ -80,14 +88,11 @@ func (r *RangeAllocator[T]) markAllocated(start, end int64) {
 	// Find the free range that contains the allocated block.
 	// The free range must have a start <= our allocation start.
 	r.freeList.DescendLessOrEqual(freeRange{Start: start}, func(item freeRange) bool {
-		// Since free ranges are sorted by start and do not overlap, the first
-		// one we find that ends after our allocation starts must be the one
-		// that contains it.
 		if item.End >= end {
 			toUpdate = item
 			found = true
 		}
-		return false // Only need to check the first candidate.
+		return false
 	})
 
 	if !found {
@@ -96,7 +101,6 @@ func (r *RangeAllocator[T]) markAllocated(start, end int64) {
 		panic("could not find a free range for allocation")
 	}
 
-	// Remove the old free range
 	r.freeList.Delete(toUpdate)
 
 	// Add back the remaining parts of the free range
@@ -113,15 +117,42 @@ func (r *RangeAllocator[T]) markAllocated(start, end int64) {
 func (r *RangeAllocator[T]) Allocate(size int64, data T) (start int64, end int64) {
 	start, end = r.findFreeRangeInternal(size)
 	if end < start {
-		return 0, 0
+		return 0, -1
 	}
-
 	got := end - start + 1
 	r.markAllocated(start, end)
 	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{Start: start, End: end, Data: data})
 	r.FreeSpace -= got
 	r.AllocatedSpace += got
 	return
+}
+
+func (r *RangeAllocator[T]) SetAllocated(start, end int64, data T) bool {
+	if start < r.Start || end > r.End || start > end {
+		// Out of range
+		return false
+	}
+
+	// First verify that it doesn't overlap with any existing allocations
+	var foundOverlap bool
+	r.allocatedList.DescendLessOrEqual(RangeAllocation[T]{Start: end}, func(item RangeAllocation[T]) bool {
+		if item.End < start {
+			return false
+		}
+		if item.Overlaps(RangeAllocation[T]{Start: start, End: end}) {
+			foundOverlap = true
+			return false
+		}
+		return true
+	})
+	if foundOverlap {
+		return false
+	}
+	r.markAllocated(start, end)
+	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{Start: start, End: end, Data: data})
+	r.FreeSpace -= end - start + 1
+	r.AllocatedSpace += end - start + 1
+	return true
 }
 
 func (r *RangeAllocator[T]) Free(start int64, end int64) bool {
@@ -167,7 +198,6 @@ func (r *RangeAllocator[T]) Free(start int64, end int64) bool {
 	}
 
 	r.freeList.ReplaceOrInsert(newlyFreed)
-
 	return true
 }
 
