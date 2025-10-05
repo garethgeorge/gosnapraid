@@ -147,6 +147,74 @@ func TestDeeplyNestedSnapshot(t *testing.T) {
 	}, gotSiblings)
 }
 
+func TestExtendExistingSnapshot(t *testing.T) {
+	// 1. Setup a simple directory tree
+	tmpDir, err := os.MkdirTemp("", "snapshot_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Create a directory and some files
+	createFileForTest(t, filepath.Join(tmpDir, "a/aa/aaa.txt"), "hello")
+	createFileForTest(t, filepath.Join(tmpDir, "a/aa/aab.txt"), "world")
+	createFileForTest(t, filepath.Join(tmpDir, "a/ab/aba.txt"), "hello")
+	createFileForTest(t, filepath.Join(tmpDir, "a/ab/abb.txt"), "world")
+	createFileForTest(t, filepath.Join(tmpDir, "b/ba/baa.txt"), "hello")
+	createFileForTest(t, filepath.Join(tmpDir, "b/ba/bab.txt"), "world")
+	createFileForTest(t, filepath.Join(tmpDir, "b/bb/bba.txt"), "hello")
+	createFileForTest(t, filepath.Join(tmpDir, "b/bb/bbb.txt"), "world")
+
+	// 2. Create a SnapshotReader and a SnapshotWriter
+	oldSnapshotReader := &EmptySnapshotReader{}
+	var buf bytes.Buffer
+	newSnapshotWriter := NewBinarySnapshotWriter(bufio.NewWriter(&buf))
+
+	// 3. Call GenerateSnapshot
+	err = GenerateSnapshot(tmpDir, oldSnapshotReader, newSnapshotWriter)
+	require.NoError(t, newSnapshotWriter.Close())
+
+	// 4. Call GenerateSnapshot again
+	oldSnapshotReader2 := NewBinarySnapshotReader(bufio.NewReader(bytes.NewReader(buf.Bytes())))
+	var buf2 bytes.Buffer
+	newSnapshotWriter2 := NewBinarySnapshotWriter(bufio.NewWriter(&buf2))
+	err = GenerateSnapshot(tmpDir, oldSnapshotReader2, newSnapshotWriter2)
+	require.NoError(t, newSnapshotWriter2.Close())
+
+	// 5. Assert that we can call GenerateSnapshot without error
+	// and that the output buffer is non-empty
+	require.NoError(t, err)
+	assert.NotEmpty(t, buf.Len(), "output buffer should not be empty")
+
+	// 5. Read the snapshot
+	newSnapshotReader := NewBinarySnapshotReader(bufio.NewReader(bytes.NewReader(buf2.Bytes())))
+
+	// 6. Assert that we can read the snapshot without error
+	require.NoError(t, newSnapshotReader.ReadHeader())
+	gotSiblings := [][]string{}
+	for {
+		if err := newSnapshotReader.NextDirectory(); err != nil {
+			if err == ErrNoMoreNodes {
+				break
+			}
+			require.NoError(t, err)
+		}
+		names := make([]string, 0, len(newSnapshotReader.Siblings()))
+		for _, sibling := range newSnapshotReader.Siblings() {
+			names = append(names, sibling.Name)
+		}
+		gotSiblings = append(gotSiblings, names)
+	}
+	require.Equal(t, [][]string{
+		{"aaa.txt", "aab.txt"},
+		{"aba.txt", "abb.txt"},
+		{"aa", "ab"},
+		{"baa.txt", "bab.txt"},
+		{"bba.txt", "bbb.txt"},
+		{"ba", "bb"},
+		{"a", "b"},
+		{},
+	}, gotSiblings)
+}
+
 func createFileForTest(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

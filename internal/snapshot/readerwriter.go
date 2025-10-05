@@ -9,110 +9,6 @@ import (
 	"github.com/garethgeorge/gosnapraid/internal/binencutil"
 )
 
-// encodeNode encodes a SnapshotNodeMetadata into bytes
-func encodeNode(node SnapshotNodeMetadata) ([]byte, error) {
-	if len(node.Name) > 4096 {
-		// on most systems the actual limit is 256 bytes so this is plenty generous.
-		return nil, fmt.Errorf("node name too long: %s", node.Name)
-	}
-
-	bytes := make([]byte, 0, 1024)
-	bytes = append(bytes, byte(node.Type))
-	bytes = binary.LittleEndian.AppendUint16(bytes, uint16(len(node.Name)))
-	bytes = append(bytes, node.Name...)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.Ino)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.Gen)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.Size)
-	bytes = binary.LittleEndian.AppendUint32(bytes, uint32(node.Mode))
-	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.AccessTime))
-	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.ChangeTime))
-	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.BirthTime))
-	bytes = binary.LittleEndian.AppendUint32(bytes, node.UID)
-	bytes = binary.LittleEndian.AppendUint32(bytes, node.GID)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.DeviceID)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.ContentHash.Lo)
-	bytes = binary.LittleEndian.AppendUint64(bytes, node.ContentHash.Hi)
-
-	return bytes, nil
-}
-
-// decodeNode decodes bytes into a SnapshotNodeMetadata
-func decodeNode(bytes []byte) (SnapshotNodeMetadata, error) {
-	node := SnapshotNodeMetadata{}
-	var err error
-	var nodeType uint8
-	nodeType, bytes, err = binencutil.BytesReadUint8(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.Type = SnapshotNodeType(nodeType)
-	var nameLen uint16
-	nameLen, bytes, err = binencutil.BytesReadUint16(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	if len(bytes) < int(nameLen) {
-		return SnapshotNodeMetadata{}, fmt.Errorf("insufficient data for name")
-	}
-	node.Name = string(bytes[:nameLen])
-	bytes = bytes[nameLen:]
-	node.Ino, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.Gen, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.Size, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	var mode uint32
-	mode, bytes, err = binencutil.BytesReadUint32(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.Mode = os.FileMode(mode)
-	node.AccessTime, bytes, err = binencutil.BytesReadInt64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.ChangeTime, bytes, err = binencutil.BytesReadInt64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.BirthTime, bytes, err = binencutil.BytesReadInt64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	var uid uint32
-	uid, bytes, err = binencutil.BytesReadUint32(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.UID = uid
-	var gid uint32
-	gid, bytes, err = binencutil.BytesReadUint32(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.GID = gid
-	node.DeviceID, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.ContentHash.Lo, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	node.ContentHash.Hi, bytes, err = binencutil.BytesReadUint64(bytes)
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	return node, nil
-}
-
 const (
 	version                      uint32 = 1
 	controlSequenceMask          uint16 = 1 << 15
@@ -231,6 +127,9 @@ func (r *BinarySnapshotReader) Parents() []SnapshotNodeMetadata {
 	// The parent is the last directory in the partials list at each level
 	parents := make([]SnapshotNodeMetadata, len(r.partialDirs))
 	for i := range r.partialDirs {
+		if len(r.partialDirs[i]) == 0 {
+			continue
+		}
 		parents[i] = r.partialDirs[i][len(r.partialDirs[i])-1]
 	}
 	return parents
@@ -272,6 +171,9 @@ func (r *BinarySnapshotReader) NextDirectory() error {
 }
 
 func (r *BinarySnapshotReader) deserializeNode(length uint16) (SnapshotNodeMetadata, error) {
+	if length > 8096 { // use 8k as a generous limit, 2x the reasonable maximum size of a node.
+		return SnapshotNodeMetadata{}, fmt.Errorf("node data too long: %d bytes", length)
+	}
 	bytes := make([]byte, length)
 	if _, err := r.reader.Read(bytes); err != nil {
 		return SnapshotNodeMetadata{}, err
@@ -299,4 +201,108 @@ func (r *EmptySnapshotReader) Parents() []SnapshotNodeMetadata {
 
 func (r *EmptySnapshotReader) Siblings() []SnapshotNodeMetadata {
 	return nil
+}
+
+// encodeNode encodes a SnapshotNodeMetadata into bytes
+func encodeNode(node SnapshotNodeMetadata) ([]byte, error) {
+	if len(node.Name) > 4096 {
+		// on most systems the actual limit is 256 bytes so this is plenty generous.
+		return nil, fmt.Errorf("node name too long: %s", node.Name)
+	}
+
+	bytes := make([]byte, 0, 1024)
+	bytes = append(bytes, byte(node.Type))
+	bytes = binary.LittleEndian.AppendUint16(bytes, uint16(len(node.Name)))
+	bytes = append(bytes, node.Name...)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.Ino)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.Gen)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.Size)
+	bytes = binary.LittleEndian.AppendUint32(bytes, uint32(node.Mode))
+	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.AccessTime))
+	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.ChangeTime))
+	bytes = binary.LittleEndian.AppendUint64(bytes, uint64(node.BirthTime))
+	bytes = binary.LittleEndian.AppendUint32(bytes, node.UID)
+	bytes = binary.LittleEndian.AppendUint32(bytes, node.GID)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.DeviceID)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.ContentHash.Lo)
+	bytes = binary.LittleEndian.AppendUint64(bytes, node.ContentHash.Hi)
+
+	return bytes, nil
+}
+
+// decodeNode decodes bytes into a SnapshotNodeMetadata
+func decodeNode(bytes []byte) (SnapshotNodeMetadata, error) {
+	node := SnapshotNodeMetadata{}
+	var err error
+	var nodeType uint8
+	nodeType, bytes, err = binencutil.BytesReadUint8(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.Type = SnapshotNodeType(nodeType)
+	var nameLen uint16
+	nameLen, bytes, err = binencutil.BytesReadUint16(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	if len(bytes) < int(nameLen) {
+		return SnapshotNodeMetadata{}, fmt.Errorf("insufficient data for name")
+	}
+	node.Name = string(bytes[:nameLen])
+	bytes = bytes[nameLen:]
+	node.Ino, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.Gen, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.Size, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	var mode uint32
+	mode, bytes, err = binencutil.BytesReadUint32(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.Mode = os.FileMode(mode)
+	node.AccessTime, bytes, err = binencutil.BytesReadInt64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.ChangeTime, bytes, err = binencutil.BytesReadInt64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.BirthTime, bytes, err = binencutil.BytesReadInt64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	var uid uint32
+	uid, bytes, err = binencutil.BytesReadUint32(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.UID = uid
+	var gid uint32
+	gid, bytes, err = binencutil.BytesReadUint32(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.GID = gid
+	node.DeviceID, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.ContentHash.Lo, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	node.ContentHash.Hi, bytes, err = binencutil.BytesReadUint64(bytes)
+	if err != nil {
+		return SnapshotNodeMetadata{}, err
+	}
+	return node, nil
 }

@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package gosnapraid;
+
+message SnapshotNodeMetadata {
+  // Name of the file in its directory
+  string name = 1;
+
+  // Type of the node (file or directory)
+  enum NodeType {
+    FILE = 0;
+    DIRECTORY = 1;
+  }
+  NodeType type = 2;
+
+  // Inode number
+  uint64 ino = 3;
+
+  // Generation number
+  uint64 gen = 4;
+
+  // File size in bytes
+  uint64 size = 5;
+
+  // File mode and permission bits
+  uint32 mode = 6;
+
+  // Access time (in microseconds since the epoch, if available on the filesystem)
+  int64 access_time = 7;
+
+  // Change time (metadata change time, in microseconds since the epoch, if available on the filesystem)
+  int64 change_time = 8;
+
+  // Birth time (creation time, in microseconds since the epoch, if available on the filesystem)
+  int64 birth_time = 9;
+
+  // User ID of owner (Unix systems)
+  uint32 uid = 10;
+
+  // Group ID of owner (Unix systems)
+  uint32 gid = 11;
+
+  // Device ID (for special files)
+  uint64 device_id = 12;
+
+  // Content hash
+  uint64 content_hash_lo = 13;
+  uint64 content_hash_hi = 14;
+}
+
+message BlockMapChunk {
+  // Segments defined in this chunk
+  repeated uint64 segment_start = 1;
+  repeated uint64 segment_end = 2;
+  repeated uint64 segment_fid = 3;
+  // Files defined in this chunk
+  repeated string file_name = 4;
+  repeated uint64 file_uid = 5;
+}

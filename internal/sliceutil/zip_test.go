@@ -345,13 +345,12 @@ func TestFullOuterJoinSlicesFunc(t *testing.T) {
 				A int
 				B int
 			}, 0)
-			f := func(a, b int) {
+			for a, b := range FullOuterJoinSlicesIter(tc.a, tc.b, tc.less) {
 				result = append(result, struct {
 					A int
 					B int
 				}{A: a, B: b})
 			}
-			FullOuterJoinSlicesFunc(tc.a, tc.b, tc.less, f)
 			if !reflect.DeepEqual(result, tc.expected) {
 				t.Errorf("FullOuterJoinSlicesFunc() produced %v, want %v", result, tc.expected)
 			}
@@ -380,14 +379,12 @@ func TestFullOuterJoinSlicesFunc(t *testing.T) {
 			A int
 			B string
 		}
-		f := func(a int, b string) {
+		for a, b := range FullOuterJoinSlicesIter(a, b, less) {
 			result = append(result, struct {
 				A int
 				B string
 			}{A: a, B: b})
 		}
-
-		FullOuterJoinSlicesFunc(a, b, less, f)
 		if !reflect.DeepEqual(result, expected) {
 			t.Errorf("FullOuterJoinSlicesFunc() with different types = %v, want %v", result, expected)
 		}
@@ -416,14 +413,12 @@ func TestFullOuterJoinSlicesFunc(t *testing.T) {
 			A string
 			B string
 		}
-		f := func(a, b string) {
+		for a, b := range FullOuterJoinSlicesIter(a, b, less) {
 			result = append(result, struct {
 				A string
 				B string
 			}{A: a, B: b})
 		}
-
-		FullOuterJoinSlicesFunc(a, b, less, f)
 		if !reflect.DeepEqual(result, expected) {
 			t.Errorf("FullOuterJoinSlicesFunc() with strings = %v, want %v", result, expected)
 		}

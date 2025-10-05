@@ -65,29 +65,41 @@ func FullOuterJoinSlices[AT, BT any](a []AT, b []BT, less func(a AT, b BT) int) 
 	return result
 }
 
-func FullOuterJoinSlicesFunc[AT, BT any](a []AT, b []BT, less func(a AT, b BT) int, f func(a AT, b BT)) {
+func FullOuterJoinSlicesIter[AT, BT any](a []AT, b []BT, less func(a AT, b BT) int) func(yield func(a AT, b BT) bool) {
 	var nilAT AT
 	var nilBT BT
 	i := 0
 	j := 0
-	for i < len(a) && j < len(b) {
-		cmp := less(a[i], b[j])
-		if cmp == 0 {
-			f(a[i], b[j])
-			i++
-			j++
-		} else if cmp < 0 {
-			f(a[i], nilBT)
-			i++
-		} else {
-			f(nilAT, b[j])
-			j++
+	return func(yield func(a AT, b BT) bool) {
+		for i < len(a) && j < len(b) {
+			cmp := less(a[i], b[j])
+			if cmp == 0 {
+				if !yield(a[i], b[j]) {
+					return
+				}
+				i++
+				j++
+			} else if cmp < 0 {
+				if !yield(a[i], nilBT) {
+					return
+				}
+				i++
+			} else {
+				if !yield(nilAT, b[j]) {
+					return
+				}
+				j++
+			}
 		}
-	}
-	for ; i < len(a); i++ {
-		f(a[i], nilBT)
-	}
-	for ; j < len(b); j++ {
-		f(nilAT, b[j])
+		for ; i < len(a); i++ {
+			if !yield(a[i], nilBT) {
+				return
+			}
+		}
+		for ; j < len(b); j++ {
+			if !yield(nilAT, b[j]) {
+				return
+			}
+		}
 	}
 }

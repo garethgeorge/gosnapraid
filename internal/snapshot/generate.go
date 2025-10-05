@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/garethgeorge/gosnapraid/internal/errors"
@@ -17,7 +18,10 @@ func GenerateSnapshot(rootDir string, oldSnapshotReader SnapshotReader, newSnaps
 	var errAgg errors.ErrorAggregation
 
 	if err := newSnapshotWriter.WriteHeader(); err != nil {
-		return fmt.Errorf("writing header: %w", err)
+		return fmt.Errorf("writing new snapshot header: %w", err)
+	}
+	if err := oldSnapshotReader.ReadHeader(); err != nil {
+		return fmt.Errorf("reading old snapshot header: %w", err)
 	}
 
 	var helper func(relativePath string) error
@@ -45,31 +49,32 @@ func GenerateSnapshot(rootDir string, oldSnapshotReader SnapshotReader, newSnaps
 			errAgg.Add(errors.NewFixedCause("read directory", fmt.Errorf("for directory %s: %w", fullPath, err)))
 			return nil
 		}
+		slices.SortFunc(entries, func(a, b os.DirEntry) int {
+			return strings.Compare(a.Name(), b.Name())
+		})
 
 		newSnapshotWriter.BeginChildren()
-
-		joined := sliceutil.FullOuterJoinSlices(entries, oldSnapshotReader.Siblings(), func(a os.DirEntry, b SnapshotNodeMetadata) int {
+		iter := sliceutil.FullOuterJoinSlicesIter(entries, oldSnapshotReader.Siblings(), func(a os.DirEntry, b SnapshotNodeMetadata) int {
 			return strings.Compare(a.Name(), b.Name)
 		})
-		for _, entry := range joined {
-			if entry.A == nil {
+		for a, b := range iter {
+			if a == nil {
 				continue // skip over entries only in the old snapshot
 			}
-
-			newMetadata, err := SnapshotNodeMetadataFromDirEntry(entry.A)
+			newMetadata, err := SnapshotNodeMetadataFromDirEntry(a)
 			if err != nil {
-				errAgg.Add(errors.NewFixedCause("get directory metadata", fmt.Errorf("for file %s/%s: %w", relativePath, entry.A.Name(), err)))
+				errAgg.Add(errors.NewFixedCause("get directory metadata", fmt.Errorf("for file %s/%s: %w", relativePath, a.Name(), err)))
 				continue
 			}
-			if entry.B.Name != "" {
+			if b.Name != "" {
 				// If there's a match, copy over the hash from the match.
-				newMetadata.ContentHash = entry.B.ContentHash
+				newMetadata.ContentHash = b.ContentHash
 			} else {
 				// If there's no match, compute the hash.
-				if !entry.A.IsDir() {
-					hash, err := computeHashForPath(fullPath + string(os.PathSeparator) + entry.A.Name())
+				if !a.IsDir() {
+					hash, err := computeHashForPath(fullPath + string(os.PathSeparator) + a.Name())
 					if err != nil {
-						errAgg.Add(errors.NewFixedCause("compute hash", fmt.Errorf("for file %s/%s: %w", relativePath, entry.A.Name(), err)))
+						errAgg.Add(errors.NewFixedCause("compute hash", fmt.Errorf("for file %s/%s: %w", relativePath, a.Name(), err)))
 						continue
 					}
 					newMetadata.ContentHash = hash
@@ -77,9 +82,11 @@ func GenerateSnapshot(rootDir string, oldSnapshotReader SnapshotReader, newSnaps
 					newMetadata.ContentHash = hashing.ContentHash{}
 				}
 			}
-			newSnapshotWriter.WriteNode(newMetadata)
-			if entry.A.IsDir() {
-				if err := helper(relativePath + string(os.PathSeparator) + entry.A.Name()); err != nil {
+			if err := newSnapshotWriter.WriteNode(newMetadata); err != nil {
+				return fmt.Errorf("writing new snapshot node: %w", err)
+			}
+			if a.IsDir() {
+				if err := helper(relativePath + string(os.PathSeparator) + a.Name()); err != nil {
 					return err
 				}
 			}
