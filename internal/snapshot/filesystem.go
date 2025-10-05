@@ -3,118 +3,149 @@
 package snapshot
 
 import (
-	"fmt"
+	"errors"
 	"os"
-	"slices"
+	"path/filepath"
+	"sort"
 	"strings"
-
-	"github.com/garethgeorge/gosnapraid/internal/errors"
+	"time"
 )
 
-type fileSystemDirIter struct {
-	entries []os.DirEntry
-	idx     int
+var (
+	ErrMetadataNotSupported = errors.New("metadata not supported")
+)
+
+type unixMetadata struct {
+	Ino        uint64
+	Gen        uint64
+	AccessTime int64 // microseconds since epoch
+	ChangeTime int64 // microseconds since epoch
+	BirthTime  int64 // microseconds since epoch
+	UID        uint32
+	GID        uint32
+	DeviceID   uint64
 }
 
-// FileSystemIterator is very deliberately written to closely resemble the interface exposed by the
-// snapshot reader / writer.
-//
-// A key requirement is that both iterators provide the same ordering of nodes.
-// The ordering is depth-first and the entries on each level are returned in lexographical order by name.
-type FileSystemIterator struct {
-	rootDirectory string
-	iters         []*fileSystemDirIter
-
-	curDir []os.DirEntry
-
-	errorAgg errors.ErrorAggregation
+type FileSystem interface {
+	ReadDir(path string) ([]os.DirEntry, error)
+	GetUnixMetadata(info os.FileInfo) (metadata unixMetadata, err error)
 }
 
-func NewFileSystemIterator(rootDirectory string) (*FileSystemIterator, error) {
-	// Read the root directory and create the initial directory iterator
-	entries, err := os.ReadDir(rootDirectory)
-	if err != nil {
-		return nil, err
+// memoryFileInfo implements os.FileInfo for the in-memory file system.
+type memoryFileInfo struct {
+	name    string
+	size    int64
+	mode    os.FileMode
+	modTime time.Time
+	isDir   bool
+}
+
+func (m *memoryFileInfo) Name() string       { return m.name }
+func (m *memoryFileInfo) Size() int64        { return m.size }
+func (m *memoryFileInfo) Mode() os.FileMode  { return m.mode }
+func (m *memoryFileInfo) ModTime() time.Time { return m.modTime }
+func (m *memoryFileInfo) IsDir() bool        { return m.isDir }
+func (m *memoryFileInfo) Sys() any           { return nil }
+
+// newMemoryFileInfo creates a new memoryFileInfo with faked properties.
+func newMemoryFileInfo(name string, isDir bool, size int64) *memoryFileInfo {
+	mode := os.FileMode(0644)
+	if isDir {
+		mode = os.FileMode(0755) | os.ModeDir
 	}
-
-	// Create the initial directory iterator
-	iter := fileSystemDirIter{
-		entries: entries,
-		idx:     0,
+	return &memoryFileInfo{
+		name:    name,
+		isDir:   isDir,
+		size:    size,
+		modTime: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		mode:    mode,
 	}
-
-	return &FileSystemIterator{
-		rootDirectory: rootDirectory,
-		iters:         []*fileSystemDirIter{&iter},
-	}, nil
 }
 
-func (f *FileSystemIterator) Errors() errors.ErrorAggregation {
-	return f.errorAgg
+// memoryDirEntry implements os.DirEntry for the in-memory file system.
+type memoryDirEntry struct {
+	info os.FileInfo
 }
 
-func (f *FileSystemIterator) CurrentDirPath() string {
-	return f.rootDirectory + string(os.PathSeparator) + f.CurrentDirRelativePath()
+func (m memoryDirEntry) Name() string               { return m.info.Name() }
+func (m memoryDirEntry) IsDir() bool                { return m.info.IsDir() }
+func (m memoryDirEntry) Type() os.FileMode          { return m.info.Mode().Type() }
+func (m memoryDirEntry) Info() (os.FileInfo, error) { return m.info, nil }
+
+type memoryFileSystemImpl struct {
+	files map[string]os.FileInfo
 }
 
-func (f *FileSystemIterator) CurrentDirRelativePath() string {
-	var segments []string
-	for _, parent := range f.iters {
-		segments = append(segments, parent.entries[parent.idx].Name())
+// newMemoryFileSystem creates a new memoryFileSystemImpl.
+func newMemoryFileSystem() *memoryFileSystemImpl {
+	return &memoryFileSystemImpl{
+		files: make(map[string]os.FileInfo),
 	}
-	return strings.Join(segments, string(os.PathSeparator))
 }
 
-func (f *FileSystemIterator) Siblings() []os.DirEntry {
-	return f.curDir
+// AddFile adds a file with the given os.FileInfo to the file system.
+func (f *memoryFileSystemImpl) AddFile(path string, info os.FileInfo) {
+	f.files[filepath.Clean(path)] = info
 }
 
-func (f *FileSystemIterator) Parents() []os.DirEntry {
-	parents := make([]os.DirEntry, len(f.iters))
-	for i, iter := range f.iters {
-		parents[i] = iter.entries[iter.idx]
-	}
-	return parents
+// AddRegularFile adds a regular file with faked metadata.
+func (f *memoryFileSystemImpl) AddRegularFile(path string, size int64) {
+	info := newMemoryFileInfo(filepath.Base(path), false, size)
+	f.files[filepath.Clean(path)] = info
 }
 
-func (f *FileSystemIterator) NextDirectory() error {
-	for {
-		if len(f.iters) == 0 {
-			return ErrNoMoreNodes
-		}
-		citr := f.iters[len(f.iters)-1]
+// AddDir adds a directory with faked metadata.
+func (f *memoryFileSystemImpl) AddDir(path string) {
+	info := newMemoryFileInfo(filepath.Base(path), true, 0)
+	f.files[filepath.Clean(path)] = info
+}
 
-		// If the iterator is exhausted, we've managed to reach the end of a directory. Yield to allow the caller to process the directory.
-		if citr.idx >= len(citr.entries) {
-			f.curDir = citr.entries
-			f.iters = f.iters[:len(f.iters)-1]
-			return nil
-		}
+func (f *memoryFileSystemImpl) ReadDir(path string) ([]os.DirEntry, error) {
+	entriesMap := make(map[string]os.DirEntry)
+	cleanedPath := filepath.Clean(path)
 
-		// Otherwise, let's look at the entry. If it's a file, do nothing. If it's a directory, read children and push the iterator onto the stack.
-		// This is how we implement a depth-first traversal.
-		ent := citr.entries[citr.idx]
-		citr.idx++
-		if ent.IsDir() {
-			if ent.Name() == "." || ent.Name() == ".." {
-				continue // Skip . and ..
-			}
-
-			dirPath := f.CurrentDirPath() + string(os.PathSeparator) + ent.Name()
-			entries, err := os.ReadDir(dirPath)
-			if err != nil {
-				f.errorAgg.Add(errors.NewFixedCause("read dir", fmt.Errorf("for dir %s: %w", dirPath, err)))
-				continue
-			}
-			// Sort the entries by name.
-			slices.SortFunc(entries, func(a, b os.DirEntry) int {
-				return strings.Compare(a.Name(), b.Name())
-			})
-			f.iters = append(f.iters, &fileSystemDirIter{
-				entries: entries,
-				idx:     0,
-			})
+	for p, info := range f.files {
+		// Check if p is a direct child of cleanedPath
+		parent := filepath.Dir(p)
+		if parent == cleanedPath {
+			entriesMap[info.Name()] = memoryDirEntry{info: info}
 			continue
 		}
+
+		// Check for implicit directories
+		if strings.HasPrefix(p, cleanedPath) {
+			prefix := cleanedPath
+			if prefix == "/" {
+				// Special case for root, so we don't trim the leading / from p
+				prefix = ""
+			}
+
+			relPath := strings.TrimPrefix(p, prefix)
+			relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+
+			parts := strings.Split(relPath, string(filepath.Separator))
+			if len(parts) > 1 {
+				childName := parts[0]
+				if _, exists := entriesMap[childName]; !exists {
+					dirInfo := newMemoryFileInfo(childName, true, 0)
+					entriesMap[childName] = memoryDirEntry{info: dirInfo}
+				}
+			}
+		}
 	}
+
+	var entries []os.DirEntry
+	for _, entry := range entriesMap {
+		entries = append(entries, entry)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	return entries, nil
+}
+
+func (f *memoryFileSystemImpl) GetUnixMetadata(info os.FileInfo) (metadata unixMetadata, err error) {
+	return unixMetadata{}, ErrMetadataNotSupported
 }

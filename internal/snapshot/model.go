@@ -86,17 +86,8 @@ func SnapshotNodeMetadataFromFinfo(finfo os.FileInfo) (SnapshotNodeMetadata, err
 	}, nil
 }
 
-func PartialSnapshotNodeMetadataFromDirEntry(entry os.DirEntry) (SnapshotNodeMetadata, error) {
+func SnapshotNodeMetadataFromDirEntry(entry os.DirEntry) (SnapshotNodeMetadata, error) {
 	finfo, err := entry.Info()
-	if err != nil {
-		return SnapshotNodeMetadata{}, err
-	}
-	return SnapshotNodeMetadataFromFinfo(finfo)
-}
-
-func FullSnapshotNodeMetadataFromPath(path string) (SnapshotNodeMetadata, error) {
-	// Call os.Stat on the file
-	finfo, err := os.Stat(path)
 	if err != nil {
 		return SnapshotNodeMetadata{}, err
 	}

@@ -1,28 +1,16 @@
-//go:build unix
+//go:build linux
 
 package snapshot
 
 import (
-	"errors"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
 
 var (
-	ErrMetadataNotSupported = errors.New("metadata not supported")
+	defaultFileSystem FileSystem = &defaultLinuxFileSystemImpl{}
 )
-
-type unixMetadata struct {
-	Ino        uint64
-	Gen        uint64
-	AccessTime int64 // microseconds since epoch
-	ChangeTime int64 // microseconds since epoch
-	BirthTime  int64 // microseconds since epoch
-	UID        uint32
-	GID        uint32
-	DeviceID   uint64
-}
 
 // getUnixMetadata extracts platform-specific metadata from file info
 func getUnixMetadata(info os.FileInfo) (metadata unixMetadata, err error) {
@@ -41,4 +29,15 @@ func getUnixMetadata(info os.FileInfo) (metadata unixMetadata, err error) {
 		GID:        uint32(stat.Gid),
 		DeviceID:   uint64(stat.Dev),
 	}, nil
+}
+
+type defaultLinuxFileSystemImpl struct {
+}
+
+func (f *defaultLinuxFileSystemImpl) ReadDir(path string) ([]os.DirEntry, error) {
+	return os.ReadDir(path)
+}
+
+func (f *defaultLinuxFileSystemImpl) GetUnixMetadata(info os.FileInfo) (metadata unixMetadata, err error) {
+	return getUnixMetadata(info)
 }
