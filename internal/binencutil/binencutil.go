@@ -1,0 +1,89 @@
+package binencutil
+
+import (
+	"encoding/binary"
+	"io"
+)
+
+func ReadUint64(reader io.Reader) (uint64, error) {
+	var buf [8]byte
+	_, err := reader.Read(buf[:])
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint64(buf[:]), nil
+}
+
+func WriteUint64(writer io.Writer, value uint64) error {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], value)
+	_, err := writer.Write(buf[:])
+	return err
+}
+
+func ReadUint32(reader io.Reader) (uint32, error) {
+	var buf [4]byte
+	_, err := reader.Read(buf[:])
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(buf[:]), nil
+}
+
+func WriteUint32(writer io.Writer, value uint32) error {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], value)
+	_, err := writer.Write(buf[:])
+	return err
+}
+
+func ReadUint16(reader io.Reader) (uint16, error) {
+	var buf [2]byte
+	_, err := reader.Read(buf[:])
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(buf[:]), nil
+}
+
+func WriteUint16(writer io.Writer, value uint16) error {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], value)
+	_, err := writer.Write(buf[:])
+	return err
+}
+
+func BytesReadUint8(bytes []byte) (uint8, []byte, error) {
+	if len(bytes) < 1 {
+		return 0, nil, io.EOF
+	}
+	return bytes[0], bytes[1:], nil
+}
+
+func BytesReadUint16(bytes []byte) (uint16, []byte, error) {
+	if len(bytes) < 2 {
+		return 0, nil, io.EOF
+	}
+	return binary.LittleEndian.Uint16(bytes), bytes[2:], nil
+}
+
+func BytesReadUint32(bytes []byte) (uint32, []byte, error) {
+	if len(bytes) < 4 {
+		return 0, nil, io.EOF
+	}
+	return binary.LittleEndian.Uint32(bytes), bytes[4:], nil
+}
+
+func BytesReadUint64(bytes []byte) (uint64, []byte, error) {
+	if len(bytes) < 8 {
+		return 0, nil, io.EOF
+	}
+	return binary.LittleEndian.Uint64(bytes), bytes[8:], nil
+}
+
+func BytesReadInt64(bytes []byte) (int64, []byte, error) {
+	if len(bytes) < 8 {
+		return 0, nil, io.EOF
+	}
+	return int64(binary.LittleEndian.Uint64(bytes)), bytes[8:], nil
+}
