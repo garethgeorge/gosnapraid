@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/garethgeorge/gosnapraid/internal/binencutil"
@@ -175,7 +176,7 @@ func (r *BinarySnapshotReader) deserializeNode(length uint16) (SnapshotNodeMetad
 		return SnapshotNodeMetadata{}, fmt.Errorf("node data too long: %d bytes", length)
 	}
 	bytes := make([]byte, length)
-	if _, err := r.reader.Read(bytes); err != nil {
+	if _, err := io.ReadFull(r.reader, bytes); err != nil {
 		return SnapshotNodeMetadata{}, err
 	}
 	return decodeNode(bytes)

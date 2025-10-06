@@ -8,7 +8,7 @@ import (
 
 func ReadUint64(reader io.Reader) (uint64, error) {
 	var buf [8]byte
-	_, err := reader.Read(buf[:])
+	_, err := io.ReadFull(reader, buf[:])
 	if err != nil {
 		return 0, err
 	}
@@ -24,7 +24,7 @@ func WriteUint64(writer io.Writer, value uint64) error {
 
 func ReadUint32(reader io.Reader) (uint32, error) {
 	var buf [4]byte
-	_, err := reader.Read(buf[:])
+	_, err := io.ReadFull(reader, buf[:])
 	if err != nil {
 		return 0, err
 	}
@@ -40,7 +40,7 @@ func WriteUint32(writer io.Writer, value uint32) error {
 
 func ReadUint16(reader io.Reader) (uint16, error) {
 	var buf [2]byte
-	_, err := reader.Read(buf[:])
+	_, err := io.ReadFull(reader, buf[:])
 	if err != nil {
 		return 0, err
 	}
@@ -68,8 +68,7 @@ func ReadLongString(reader io.Reader) (string, error) {
 		return "", err
 	}
 	buf := make([]byte, length)
-	_, err = reader.Read(buf)
-	if err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return "", err
 	}
 	return string(buf), nil
@@ -92,11 +91,53 @@ func ReadShortString(reader io.Reader) (string, error) {
 		return "", err
 	}
 	buf := make([]byte, length)
-	_, err = reader.Read(buf)
-	if err != nil {
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return "", err
 	}
 	return string(buf), nil
+}
+
+func WriteLongBytes(writer io.Writer, value []byte) error {
+	if err := WriteUint64(writer, uint64(len(value))); err != nil {
+		return err
+	}
+	_, err := writer.Write(value)
+	return err
+}
+
+func ReadLongBytes(reader io.Reader) ([]byte, error) {
+	length, err := ReadUint64(reader)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func WriteShortBytes(writer io.Writer, value []byte) error {
+	if len(value) > 65535 {
+		return fmt.Errorf("byte slice too long: %d", len(value))
+	}
+	if err := WriteUint16(writer, uint16(len(value))); err != nil {
+		return err
+	}
+	_, err := writer.Write(value)
+	return err
+}
+
+func ReadShortBytes(reader io.Reader) ([]byte, error) {
+	length, err := ReadUint16(reader)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
 }
 
 func BytesReadUint8(bytes []byte) (uint8, []byte, error) {

@@ -5,21 +5,11 @@ import (
 )
 
 type RangeAllocation[T any] struct {
-	Start int64
-	End   int64
-	Data  T
+	Range
+	Data T
 }
 
 func (r RangeAllocation[T]) Overlaps(other RangeAllocation[T]) bool {
-	return r.Start <= other.End && other.Start <= r.End
-}
-
-type freeRange struct {
-	Start int64
-	End   int64
-}
-
-func (r freeRange) Overlaps(other freeRange) bool {
 	return r.Start <= other.End && other.Start <= r.End
 }
 
@@ -34,17 +24,17 @@ type RangeAllocator[T any] struct {
 	// The list of allocated ranges, we will search outside of these.
 	allocatedList *btree.BTreeG[RangeAllocation[T]]
 	// The list of free ranges, used for finding a free spot.
-	freeList *btree.BTreeG[freeRange]
+	freeList *btree.BTreeG[Range]
 }
 
 func NewRangeAllocator[T any](start int64, end int64) *RangeAllocator[T] {
-	freeList := btree.NewG(32, func(a, b freeRange) bool {
+	freeList := btree.NewG(32, func(a, b Range) bool {
 		return a.Start < b.Start
 	})
 	var freeSpace int64
 	if end >= start {
 		freeSpace = end - start + 1
-		freeList.ReplaceOrInsert(freeRange{Start: start, End: end})
+		freeList.ReplaceOrInsert(Range{Start: start, End: end})
 	}
 
 	return &RangeAllocator[T]{
@@ -67,7 +57,7 @@ func (r *RangeAllocator[T]) recomputeFreeList() {
 		freeStart := prevBlockEnd + 1
 		freeEnd := item.Start - 1
 		if freeEnd >= freeStart {
-			r.freeList.ReplaceOrInsert(freeRange{Start: freeStart, End: freeEnd})
+			r.freeList.ReplaceOrInsert(Range{Start: freeStart, End: freeEnd})
 		}
 		prevBlockEnd = item.End
 		return true
@@ -77,17 +67,17 @@ func (r *RangeAllocator[T]) recomputeFreeList() {
 	freeStart := prevBlockEnd + 1
 	freeEnd := r.End
 	if freeEnd >= freeStart {
-		r.freeList.ReplaceOrInsert(freeRange{Start: freeStart, End: freeEnd})
+		r.freeList.ReplaceOrInsert(Range{Start: freeStart, End: freeEnd})
 	}
 }
 
 func (r *RangeAllocator[T]) markAllocated(start, end int64) {
-	var toUpdate freeRange
+	var toUpdate Range
 	var found bool
 
 	// Find the free range that contains the allocated block.
 	// The free range must have a start <= our allocation start.
-	r.freeList.DescendLessOrEqual(freeRange{Start: start}, func(item freeRange) bool {
+	r.freeList.DescendLessOrEqual(Range{Start: start}, func(item Range) bool {
 		if item.End >= end {
 			toUpdate = item
 			found = true
@@ -106,11 +96,11 @@ func (r *RangeAllocator[T]) markAllocated(start, end int64) {
 	// Add back the remaining parts of the free range
 	// Part before the allocation
 	if toUpdate.Start < start {
-		r.freeList.ReplaceOrInsert(freeRange{Start: toUpdate.Start, End: start - 1})
+		r.freeList.ReplaceOrInsert(Range{Start: toUpdate.Start, End: start - 1})
 	}
 	// Part after the allocation
 	if toUpdate.End > end {
-		r.freeList.ReplaceOrInsert(freeRange{Start: end + 1, End: toUpdate.End})
+		r.freeList.ReplaceOrInsert(Range{Start: end + 1, End: toUpdate.End})
 	}
 }
 
@@ -121,7 +111,7 @@ func (r *RangeAllocator[T]) Allocate(size int64, data T) (start int64, end int64
 	}
 	got := end - start + 1
 	r.markAllocated(start, end)
-	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{Start: start, End: end, Data: data})
+	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{Range: Range{Start: start, End: end}, Data: data})
 	r.FreeSpace -= got
 	r.AllocatedSpace += got
 	return
@@ -135,11 +125,13 @@ func (r *RangeAllocator[T]) SetAllocated(start, end int64, data T) bool {
 
 	// First verify that it doesn't overlap with any existing allocations
 	var foundOverlap bool
-	r.allocatedList.DescendLessOrEqual(RangeAllocation[T]{Start: end}, func(item RangeAllocation[T]) bool {
+	r.allocatedList.DescendLessOrEqual(RangeAllocation[T]{
+		Range: Range{Start: end},
+	}, func(item RangeAllocation[T]) bool {
 		if item.End < start {
 			return false
 		}
-		if item.Overlaps(RangeAllocation[T]{Start: start, End: end}) {
+		if item.Range.Overlaps(Range{Start: start, End: end}) {
 			foundOverlap = true
 			return false
 		}
@@ -149,7 +141,10 @@ func (r *RangeAllocator[T]) SetAllocated(start, end int64, data T) bool {
 		return false
 	}
 	r.markAllocated(start, end)
-	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{Start: start, End: end, Data: data})
+	r.allocatedList.ReplaceOrInsert(RangeAllocation[T]{
+		Range: Range{Start: start, End: end},
+		Data:  data,
+	})
 	r.FreeSpace -= end - start + 1
 	r.AllocatedSpace += end - start + 1
 	return true
@@ -159,7 +154,7 @@ func (r *RangeAllocator[T]) Free(start int64, end int64) bool {
 	// Find the allocation to be freed. The btree's less function only uses
 	// Start, so Get will find an item with the same start. We must verify
 	// the End also matches.
-	itemToFind := RangeAllocation[T]{Start: start}
+	itemToFind := RangeAllocation[T]{Range: Range{Start: start}}
 	foundItem, found := r.allocatedList.Get(itemToFind)
 	if !found || foundItem.End != end {
 		return false
@@ -174,18 +169,18 @@ func (r *RangeAllocator[T]) Free(start int64, end int64) bool {
 	r.AllocatedSpace -= got
 
 	// Add the freed range to the free list and merge with adjacent free ranges.
-	newlyFreed := freeRange{Start: start, End: end}
+	newlyFreed := Range{Start: start, End: end}
 
 	// Check for merge with range after
-	if next, nextFound := r.freeList.Get(freeRange{Start: end + 1}); nextFound {
+	if next, nextFound := r.freeList.Get(Range{Start: end + 1}); nextFound {
 		r.freeList.Delete(next)
 		newlyFreed.End = next.End
 	}
 
 	// Check for merge with range before
-	var prev freeRange
+	var prev Range
 	var prevFound bool
-	r.freeList.DescendLessOrEqual(freeRange{Start: start}, func(it freeRange) bool {
+	r.freeList.DescendLessOrEqual(Range{Start: start}, func(it Range) bool {
 		if it.End == start-1 {
 			prev = it
 			prevFound = true
@@ -202,12 +197,12 @@ func (r *RangeAllocator[T]) Free(start int64, end int64) bool {
 }
 
 func (r *RangeAllocator[T]) findFreeRangeInternal(size int64) (start int64, end int64) {
-	var bestFit freeRange
+	var bestFit Range
 	var foundBestFit bool
 
-	var foundRange freeRange
+	var foundRange Range
 	var found bool
-	r.freeList.Ascend(func(item freeRange) bool {
+	r.freeList.Ascend(func(item Range) bool {
 		currentSize := item.End - item.Start + 1
 		if currentSize >= size {
 			foundRange = item

@@ -10,6 +10,7 @@ import (
 )
 
 func TestRangeAllocator_String(t *testing.T) {
+	t.Parallel()
 	allocator := NewRangeAllocator[string](0, 100)
 
 	// Test basic allocation
@@ -22,7 +23,7 @@ func TestRangeAllocator_String(t *testing.T) {
 	assert.Equal(t, int64(19), end)
 
 	// Test allocation when there is a gap
-	allocator.allocatedList.ReplaceOrInsert(RangeAllocation[string]{Start: 50, End: 59, Data: "gap"}) // size 10
+	allocator.allocatedList.ReplaceOrInsert(RangeAllocation[string]{Range: Range{Start: 50, End: 59}, Data: "gap"}) // size 10
 	allocator.recomputeFreeList()
 	start, end = allocator.Allocate(10, "third")
 	assert.Equal(t, int64(20), start)
@@ -59,14 +60,14 @@ func TestRangeAllocator_String(t *testing.T) {
 		allocations = append(allocations, alloc)
 	}
 	expectedAllocations := []RangeAllocation[string]{
-		{Start: 0, End: 9, Data: "first"},
-		{Start: 10, End: 19, Data: "second"},
-		{Start: 20, End: 29, Data: "third"},
-		{Start: 30, End: 49, Data: "fourth"},
-		{Start: 50, End: 59, Data: "gap"},
-		{Start: 60, End: 69, Data: "fifth"},
-		{Start: 70, End: 79, Data: "sixth"},
-		{Start: 80, End: 100, Data: "seventh"},
+		{Range: Range{Start: 0, End: 9}, Data: "first"},
+		{Range: Range{Start: 10, End: 19}, Data: "second"},
+		{Range: Range{Start: 20, End: 29}, Data: "third"},
+		{Range: Range{Start: 30, End: 49}, Data: "fourth"},
+		{Range: Range{Start: 50, End: 59}, Data: "gap"},
+		{Range: Range{Start: 60, End: 69}, Data: "fifth"},
+		{Range: Range{Start: 70, End: 79}, Data: "sixth"},
+		{Range: Range{Start: 80, End: 100}, Data: "seventh"},
 	}
 	assert.Equal(t, len(expectedAllocations), len(allocations))
 	for i := range expectedAllocations {
@@ -75,6 +76,7 @@ func TestRangeAllocator_String(t *testing.T) {
 }
 
 func TestRangeAllocator_Free(t *testing.T) {
+	t.Parallel()
 	allocator := NewRangeAllocator[string](0, 100)
 	start1st, end1st := allocator.Allocate(10, "first")
 	assert.Equal(t, int64(0), start1st)
@@ -88,8 +90,8 @@ func TestRangeAllocator_Free(t *testing.T) {
 		allocations = append(allocations, alloc)
 	}
 	var expectedAllocations []RangeAllocation[string] = []RangeAllocation[string]{
-		{Start: 0, End: 9, Data: "first"},
-		{Start: 10, End: 19, Data: "second"},
+		{Range: Range{Start: 0, End: 9}, Data: "first"},
+		{Range: Range{Start: 10, End: 19}, Data: "second"},
 	}
 	assert.Equal(t, expectedAllocations, allocations)
 	allocator.Free(start1st, end1st)
@@ -102,13 +104,14 @@ func TestRangeAllocator_Free(t *testing.T) {
 		allocations2 = append(allocations2, alloc)
 	}
 	var expectedAllocations2 []RangeAllocation[string] = []RangeAllocation[string]{
-		{Start: 0, End: 9, Data: "third"},
-		{Start: 10, End: 19, Data: "second"},
+		{Range: Range{Start: 0, End: 9}, Data: "third"},
+		{Range: Range{Start: 10, End: 19}, Data: "second"},
 	}
 	assert.Equal(t, expectedAllocations2, allocations2)
 }
 
 func TestRangeAllocator_SetAllocated(t *testing.T) {
+	t.Parallel()
 	allocator := NewRangeAllocator[string](0, 100)
 	assert.True(t, allocator.SetAllocated(0, 9, "first"))
 	assert.False(t, allocator.SetAllocated(0, 10, "first"))
@@ -159,7 +162,7 @@ func BenchmarkRangeAllocator_Fragmented(b *testing.B) {
 	var allocs []RangeAllocation[string]
 	for i := 0; i < b.N; i++ {
 		allocator.Allocate(10, fmt.Sprintf("%d", i))
-		allocs = append(allocs, RangeAllocation[string]{Start: int64(i), End: int64(i) + 10, Data: fmt.Sprintf("%d", i)})
+		allocs = append(allocs, RangeAllocation[string]{Range: Range{Start: int64(i), End: int64(i) + 10}, Data: fmt.Sprintf("%d", i)})
 
 		// random chance to delete an old allocation
 		if rand.Intn(100) < 50 {
@@ -196,7 +199,7 @@ func FuzzRangeAllocator(f *testing.F) {
 				data := fmt.Sprintf("alloc_%d", i)
 				start, end := allocator.Allocate(size, data)
 				if end >= start { // successful allocation
-					expectedAllocs[data] = RangeAllocation[string]{Start: start, End: end, Data: data}
+					expectedAllocs[data] = RangeAllocation[string]{Range: Range{Start: start, End: end}, Data: data}
 				}
 			case 1: // Free random allocation
 				if len(expectedAllocs) > 0 {
@@ -219,7 +222,7 @@ func FuzzRangeAllocator(f *testing.F) {
 				}
 				data := fmt.Sprintf("set_%d", i)
 				if allocator.SetAllocated(start, end, data) {
-					expectedAllocs[data] = RangeAllocation[string]{Start: start, End: end, Data: data}
+					expectedAllocs[data] = RangeAllocation[string]{Range: Range{Start: start, End: end}, Data: data}
 				}
 			}
 
