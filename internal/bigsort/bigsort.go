@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"iter"
-	"log"
 	"slices"
 	"sort"
 	"sync"
@@ -34,12 +33,17 @@ type BigSorter[T any, PT interface {
 	// curBlockSizeBytes is the current size of the block being built
 	curBlockSizeBytes int64
 	curBlock          []T // Stores the actual values, not pointers
+	blockFlushGroup   sync.WaitGroup
 
-	// totalItems is the total number of itesm added, can be used to check completenses after sorting.
+	// totalItems is the total number of items added, can be used to check completeness after sorting.
 	totalItems int64
 
 	// buffers holds the list of buffers that have been created
-	buffers []buffers.BufferHandle
+	buffersMu sync.Mutex
+	buffers   []buffers.BufferHandle
+
+	errMu sync.Mutex
+	err   error
 }
 
 func NewBigSorter[T any, PT interface {
@@ -57,7 +61,6 @@ func (bs *BigSorter[T, PT]) Add(data T) error {
 	// We need a pointer to call Size()
 	var dataPtr PT = &data
 	bs.curBlockSizeBytes += dataPtr.Size()
-	log.Printf("Added item, current block size: %d %d %d", bs.curBlockSizeBytes, len(bs.curBlock), bs.totalItems)
 	if bs.curBlockSizeBytes >= bs.maxBlockSizeBytes {
 		if err := bs.storeCurrentBlock(); err != nil {
 			return fmt.Errorf("store current block: %w", err)
@@ -72,7 +75,16 @@ func (bs *BigSorter[T, PT]) TotalItems() int64 {
 }
 
 func (bs *BigSorter[T, PT]) Flush() error {
-	return bs.storeCurrentBlock()
+	if err := bs.storeCurrentBlock(); err != nil {
+		return fmt.Errorf("store current block: %w", err)
+	}
+	return nil
+}
+
+func (bs *BigSorter[T, PT]) Err() error {
+	bs.errMu.Lock()
+	defer bs.errMu.Unlock()
+	return bs.err
 }
 
 func (bs *BigSorter[T, PT]) storeCurrentBlock() error {
@@ -116,6 +128,8 @@ func (bs *BigSorter[T, PT]) storeCurrentBlock() error {
 		return fmt.Errorf("flush buffer writer: %w", err)
 	}
 
+	bs.buffersMu.Lock()
+	defer bs.buffersMu.Unlock()
 	bs.buffers = append(bs.buffers, bufHandle)
 	bs.curBlock = bs.curBlock[:0]
 	bs.curBlockSizeBytes = 0
@@ -126,6 +140,8 @@ func (bs *BigSorter[T, PT]) SortIter() *BigSortIterator[T, PT] {
 	if len(bs.curBlock) > 0 {
 		panic("cannot create iterator with unflushed data, call Flush() first")
 	}
+	bs.buffersMu.Lock()
+	defer bs.buffersMu.Unlock()
 	return &BigSortIterator[T, PT]{
 		buffers:     slices.Clone(bs.buffers),
 		expectCount: bs.totalItems,

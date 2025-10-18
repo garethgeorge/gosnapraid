@@ -389,3 +389,98 @@ func TestBigSorter_IteratorError(t *testing.T) {
 		t.Fatalf("expected error to contain 'injected read error', but got: %v", err)
 	}
 }
+
+func BenchmarkBigSorter_Add(b *testing.B) {
+	b.ReportAllocs()
+
+	// Use a fixed key and value size for consistent item size
+	const keySize = 32
+	const valueSize = 100
+	// From ByteKeySortable's Serialize method: 2 bytes for key length, 2 for value length
+	const itemSize = int64(4 + keySize + valueSize)
+	const totalDataSize = 5 * 1024 * 1024 * 1024 // 5 GB
+	const itemCount = totalDataSize / itemSize
+
+	// Use a small max block size to ensure many blocks are created and merged.
+	const maxBlockSizeBytes = 64 * 1024 * 1024 // 64MB
+
+	// Pre-generate items to avoid measuring allocation time
+	items := make([]ByteKeySortable, itemCount)
+	value := make([]byte, valueSize)
+	for i := int64(0); i < itemCount; i++ {
+		key := []byte(fmt.Sprintf("key-%9d"+fmt.Sprintf("%d", keySize-4)+"d", i))
+		items[i] = ByteKeySortable{Key: key, Value: value}
+	}
+
+	b.ResetTimer()
+
+	for n := 0; n < b.N; n++ {
+		factory := buffers.NewCompressedBufferFactory(buffers.NewInMemoryBufferFactory())
+		sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+
+		// Add items
+		for i := int64(0); i < itemCount; i++ {
+			if err := sorter.Add(items[i]); err != nil {
+				b.Fatalf("failed to add item: %v", err)
+			}
+		}
+
+		if err := sorter.Flush(); err != nil {
+			b.Fatalf("failed to flush: %v", err)
+		}
+
+		factory.Release()
+	}
+}
+
+func BenchmarkBigSorter_Sort(b *testing.B) {
+	b.ReportAllocs()
+
+	// Use a fixed key and value size for consistent item size
+	const keySize = 32
+	const valueSize = 100
+	// From ByteKeySortable's Serialize method: 2 bytes for key length, 2 for value length
+	const itemSize = int64(4 + keySize + valueSize)
+	const totalDataSize = 5 * 1024 * 1024 * 1024 // 5 GB
+	const itemCount = totalDataSize / itemSize
+
+	// Use a small max block size to ensure many blocks are created and merged.
+	const maxBlockSizeBytes = 64 * 1024 * 1024 // 64MB
+
+	// Pre-populate the sorter (this is not timed)
+	factory := buffers.NewCompressedBufferFactory(buffers.NewInMemoryBufferFactory())
+	defer factory.Release()
+	sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+
+	for i := int64(0); i < itemCount; i++ {
+		key := []byte(fmt.Sprintf("key-%9d"+fmt.Sprintf("%d", keySize-4)+"d", i))
+		value := make([]byte, valueSize)
+		item := ByteKeySortable{Key: key, Value: value}
+		if err := sorter.Add(item); err != nil {
+			b.Fatalf("failed to add item: %v", err)
+		}
+	}
+
+	if err := sorter.Flush(); err != nil {
+		b.Fatalf("failed to flush: %v", err)
+	}
+
+	b.ResetTimer()
+
+	for n := 0; n < b.N; n++ {
+		// Time only the sorting/iteration phase
+		iterator := sorter.SortIter()
+		iteratedCount := int64(0)
+		for range iterator.Iter() {
+			iteratedCount++
+		}
+
+		if err := iterator.Err(); err != nil {
+			b.Fatalf("iteration failed: %v", err)
+		}
+
+		if iteratedCount != itemCount {
+			b.Fatalf("expected %d items, but got %d", itemCount, iteratedCount)
+		}
+	}
+}
