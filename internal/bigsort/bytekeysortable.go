@@ -11,8 +11,8 @@ type ByteKeySortable struct {
 	Value []byte
 }
 
-func (b *ByteKeySortable) Less(other ByteKeySortable) bool {
-	return bytes.Compare(b.Key, other.Key) < 0
+func (b *ByteKeySortable) Less(other BigSortable) bool {
+	return bytes.Compare(b.Key, other.(*ByteKeySortable).Key) < 0
 }
 
 func (b *ByteKeySortable) Deserialize(data []byte) error {
