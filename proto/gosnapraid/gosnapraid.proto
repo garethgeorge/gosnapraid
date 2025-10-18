@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package gosnapraid;
+
+option go_package = "github.com/garethgeorge/gosnapraid/proto/gosnapraidpb";
+
+import "proto/vtproto/ext.proto";
+
+enum HashType {
+  HASH_UNKNOWN = 0;
+  HASH_XXHASH64 = 1;
+  HASH_SHA256 = 2;
+}
+
+message FileMetadata {
+  option (vtproto.mempool) = true; // Enable memory pooling
+
+  // File path, primary key
+  string path = 1;
+
+  // Basic file metadata for fast-diffing
+  uint64 size = 2;
+  uint64 mtime = 3;
+  uint32 flags = 4;
+
+  // Hash fields for authoritative change detection & integrity checking
+  HashType hashtype = 5;
+  uint64 hashhi = 6;
+  uint64 hashlo = 7;
+
+  // Fields for slice range tracking
+  repeated uint32 slice_range_starts = 8;
+  repeated uint32 slice_range_ends = 9;
+}
