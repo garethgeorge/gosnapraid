@@ -104,7 +104,7 @@ func TestBigSorter(t *testing.T) {
 					factory := tc.bufferFactory(t)
 					defer factory.Release()
 
-					sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+					sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(maxBlockSizeBytes))
 
 					for _, item := range generatedItems {
 						if err := sorter.Add(item); err != nil {
@@ -176,7 +176,7 @@ func TestBigSorter_Cancellation(t *testing.T) {
 	factory := buffers.NewInMemoryBufferFactory()
 	defer factory.Release()
 
-	sorter := NewBigSorter[ByteKeySortable](factory, int64(maxBlockSizeBytes))
+	sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(maxBlockSizeBytes))
 
 	for _, item := range items {
 		if err := sorter.Add(item); err != nil {
@@ -216,7 +216,7 @@ func TestBigSorter_Cancellation(t *testing.T) {
 // It was found during development that not taking a pointer to the slice element
 // for the Less method call resulted in incorrect sorting.
 func TestBigSorter_Correctness(t *testing.T) {
-	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), 1024)
+	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), WithMaxBufferSizeBytes(1024))
 
 	// Insert items in reverse order to test sorting explicitly
 	for i := 100; i > 0; i-- {
@@ -256,7 +256,7 @@ func TestBigSorter_PanicOnUnflushed(t *testing.T) {
 		}
 	}()
 
-	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), 1024)
+	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), WithMaxBufferSizeBytes(1024))
 	_ = bs.Add(ByteKeySortable{Key: []byte("key"), Value: []byte("value")})
 
 	// This should panic
@@ -265,7 +265,7 @@ func TestBigSorter_PanicOnUnflushed(t *testing.T) {
 
 // TestBigSorter_Empty demonstrates that the sorter works correctly with no items.
 func TestBigSorter_Empty(t *testing.T) {
-	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), 1024)
+	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), WithMaxBufferSizeBytes(1024))
 
 	if err := bs.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
@@ -288,7 +288,7 @@ func TestBigSorter_Empty(t *testing.T) {
 
 // TestBigSorter_SingleItem demonstrates that the sorter works correctly with one item.
 func TestBigSorter_SingleItem(t *testing.T) {
-	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), 1024)
+	bs := NewBigSorter[ByteKeySortable](buffers.NewInMemoryBufferFactory(), WithMaxBufferSizeBytes(1024))
 
 	item := ByteKeySortable{Key: []byte("thekey"), Value: []byte("thevalue")}
 	if err := bs.Add(item); err != nil {
@@ -368,7 +368,7 @@ func (w *errorReadWriteCloser) Close() error { return nil }
 
 func TestBigSorter_IteratorError(t *testing.T) {
 	factory := &errorBufferFactory{}
-	sorter := NewBigSorter[ByteKeySortable](factory, 10)
+	sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(10))
 	_ = sorter.Add(ByteKeySortable{Key: []byte("a"), Value: []byte("b")})
 	_ = sorter.Flush()
 
@@ -416,7 +416,7 @@ func BenchmarkBigSorter_Add(b *testing.B) {
 
 	for n := 0; n < b.N; n++ {
 		factory := buffers.NewCompressedBufferFactory(buffers.NewInMemoryBufferFactory())
-		sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+		sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(maxBlockSizeBytes))
 
 		// Add items
 		for i := int64(0); i < itemCount; i++ {
@@ -450,7 +450,7 @@ func BenchmarkBigSorter_Sort(b *testing.B) {
 	// Pre-populate the sorter (this is not timed)
 	factory := buffers.NewCompressedBufferFactory(buffers.NewInMemoryBufferFactory())
 	defer factory.Release()
-	sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+	sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(maxBlockSizeBytes))
 
 	for i := int64(0); i < itemCount; i++ {
 		key := []byte(fmt.Sprintf("key-%9d"+fmt.Sprintf("%d", keySize-4)+"d", i))
@@ -514,7 +514,7 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 		factory := buffers.NewCompressedBufferFactory(baseFactory)
 		defer factory.Release()
 
-		sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+		sorter := NewBigSorter[ByteKeySortable](factory, WithMaxBufferSizeBytes(maxBlockSizeBytes))
 
 		// Add items - generate on-the-fly to avoid memory pressure
 		b.Log("Adding items...")

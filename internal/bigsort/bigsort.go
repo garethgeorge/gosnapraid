@@ -11,15 +11,37 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/garethgeorge/gosnapraid/internal/bigsort/buffers"
 )
 
-const DefaultMaxBufferSizeBytes = 256 * 1024 * 1024 // 256 MB
+type options struct {
+	maxBufferSizeBytes int64
+	addParallelism     int64
+}
 
-// BigSorter is updated to use the value/pointer generic pattern.
-// T is the value type for inline storage.
-// PT is the pointer type (*T) that satisfies BigSortable.
+func WithMaxBufferSizeBytes(size int64) func(*options) {
+	return func(o *options) {
+		o.maxBufferSizeBytes = size
+	}
+}
+
+func WithAddParallelism(parallelism int64) func(*options) {
+	return func(o *options) {
+		o.addParallelism = parallelism
+	}
+}
+
+// BigSorter is a generic sorter that can handle large amounts of data by breaking it into sorted
+// blocks and then performing a k-way merge during iteration.
+//
+// T is the type of the items to be sorted. PT is a pointer to T that implements the BigSortable interface.
+//
+// BigSorter is thread safe for adding items, flushing, and iteration.
+//
+// Add items using Add(), then call Flush() to ensure all data is written. Errors during Add() and Flush() must be checked.
+// After flushing, create an iterator using SortIter() to read sorted items, always check for errors from the iterator using Err() after iteration.
 type BigSorter[T any, PT interface {
 	*T
 	BigSortable
@@ -31,9 +53,9 @@ type BigSorter[T any, PT interface {
 	maxBlockSizeBytes int64
 
 	// curBlockSizeBytes is the current size of the block being built
+	curBlockMu        sync.Mutex
 	curBlockSizeBytes int64
 	curBlock          []T // Stores the actual values, not pointers
-	blockFlushGroup   sync.WaitGroup
 
 	// totalItems is the total number of items added, can be used to check completeness after sorting.
 	totalItems int
@@ -42,29 +64,90 @@ type BigSorter[T any, PT interface {
 	buffersMu sync.Mutex
 	buffers   []buffers.BufferHandle
 
-	errMu sync.Mutex
-	err   error
+	addBlockWg   sync.WaitGroup
+	addBlockChan chan []T
+
+	err atomic.Pointer[error]
 }
 
 func NewBigSorter[T any, PT interface {
 	*T
 	BigSortable
-}](factory buffers.BufferFactory, maxBufferSizeBytes int64) *BigSorter[T, PT] {
-	return &BigSorter[T, PT]{
-		bufferFactory:     factory,
-		maxBlockSizeBytes: maxBufferSizeBytes,
+}](factory buffers.BufferFactory, opts ...func(*options)) *BigSorter[T, PT] {
+	options := options{
+		maxBufferSizeBytes: 32 * 1024 * 1024, // 32 MB
+		addParallelism:     2,
 	}
+
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	sorter := &BigSorter[T, PT]{
+		bufferFactory:     factory,
+		maxBlockSizeBytes: options.maxBufferSizeBytes,
+		addBlockWg:        sync.WaitGroup{},
+		addBlockChan:      make(chan []T),
+	}
+
+	go func() {
+		for block := range sorter.addBlockChan {
+			if err := sorter.storeBlock(block); err != nil {
+				sorter.setError(fmt.Errorf("store block: %w", err))
+			}
+			sorter.addBlockWg.Done()
+		}
+	}()
+
+	return sorter
+}
+
+func (bs *BigSorter[T, PT]) setError(err error) {
+	bs.err.CompareAndSwap(nil, &err)
+}
+
+func (bs *BigSorter[T, PT]) haveError() error {
+	if errPtr := bs.err.Load(); errPtr != nil {
+		return *errPtr
+	}
+	return nil
+}
+
+func (bs *BigSorter[T, PT]) Close() error {
+	// Wait for inflight blocks then close the add block channel, will panic if called twice
+	bs.addBlockWg.Wait()
+	close(bs.addBlockChan)
+
+	// Release buffer storage
+	bs.buffersMu.Lock()
+	defer bs.buffersMu.Unlock()
+	bs.buffers = nil
+	if err := bs.bufferFactory.Release(); err != nil {
+		return fmt.Errorf("release buffer factory: %w", err)
+	}
+
+	// Note that we don't check the error state, caller should get the error from Add() and Flush() call sequence
+	return nil
 }
 
 func (bs *BigSorter[T, PT]) Add(data T) error {
+	bs.curBlockMu.Lock()
+	defer bs.curBlockMu.Unlock()
+
+	// Check for errors before proceeding
+	if err := bs.haveError(); err != nil {
+		return err
+	}
+
+	// Append data to current block
 	bs.curBlock = append(bs.curBlock, data)
-	// We need a pointer to call Size()
 	var dataPtr PT = &data
 	bs.curBlockSizeBytes += dataPtr.Size()
+
+	// Check if we need to flush the block, if we do so, swap to a new block
+	// and send the old one to the work queue for storage.
 	if bs.curBlockSizeBytes >= bs.maxBlockSizeBytes {
-		if err := bs.storeCurrentBlock(); err != nil {
-			return fmt.Errorf("store current block: %w", err)
-		}
+		bs.swapToNewBlock()
 	}
 	bs.totalItems++
 	return nil
@@ -75,26 +158,30 @@ func (bs *BigSorter[T, PT]) TotalItems() int {
 }
 
 func (bs *BigSorter[T, PT]) Flush() error {
-	if err := bs.storeCurrentBlock(); err != nil {
-		return fmt.Errorf("store current block: %w", err)
+	bs.swapToNewBlock()
+	bs.addBlockWg.Wait()
+	if err := bs.haveError(); err != nil {
+		return fmt.Errorf("block failed: %w", err)
 	}
 	return nil
 }
 
-func (bs *BigSorter[T, PT]) Err() error {
-	bs.errMu.Lock()
-	defer bs.errMu.Unlock()
-	return bs.err
+func (bs *BigSorter[T, PT]) swapToNewBlock() {
+	bs.addBlockWg.Add(1)
+	bs.addBlockChan <- bs.curBlock
+
+	bs.curBlock = make([]T, 0, len(bs.curBlock))
+	bs.curBlockSizeBytes = 0
 }
 
-func (bs *BigSorter[T, PT]) storeCurrentBlock() error {
-	if len(bs.curBlock) == 0 {
+func (bs *BigSorter[T, PT]) storeBlock(block []T) error {
+	if len(block) == 0 {
 		return nil
 	}
 
-	sort.Slice(bs.curBlock, func(i, j int) bool {
-		ptrI := PT(&bs.curBlock[i])
-		ptrJ := PT(&bs.curBlock[j])
+	sort.Slice(block, func(i, j int) bool {
+		ptrI := PT(&block[i])
+		ptrJ := PT(&block[j])
 		return ptrI.Less(ptrJ)
 	})
 
@@ -111,9 +198,9 @@ func (bs *BigSorter[T, PT]) storeCurrentBlock() error {
 	bufioWriter := bufio.NewWriterSize(writer, 32*1024) // 32 KB buffer
 	lenBuf := make([]byte, 4)
 	buf := make([]byte, 0, 32*1024) // 32 KB buffer available to serialize items
-	for i := range bs.curBlock {
+	for i := range block {
 		// Get a pointer to the item in the slice to call Serialize
-		itemPtr := PT(&bs.curBlock[i])
+		itemPtr := PT(&block[i])
 		serialized := itemPtr.Serialize(buf)
 		binary.BigEndian.PutUint32(lenBuf, uint32(len(serialized)))
 		if _, err := bufioWriter.Write(lenBuf); err != nil {
@@ -131,8 +218,6 @@ func (bs *BigSorter[T, PT]) storeCurrentBlock() error {
 	bs.buffersMu.Lock()
 	defer bs.buffersMu.Unlock()
 	bs.buffers = append(bs.buffers, bufHandle)
-	bs.curBlock = bs.curBlock[:0]
-	bs.curBlockSizeBytes = 0
 	return nil
 }
 
@@ -209,21 +294,22 @@ type BigSortIterator[T any, PT interface {
 	expectCount int
 
 	// Error handling
-	errOnce  sync.Once
 	errReady chan error
-	err      error
+	err      atomic.Pointer[error]
 }
 
 func (bsi *BigSortIterator[T, PT]) Err() error {
 	<-bsi.errReady // Wait for iterator to finish
-	return bsi.err
+	if errPtr := bsi.err.Load(); errPtr != nil {
+		return *errPtr
+	}
+	return nil
 }
 
 func (bsi *BigSortIterator[T, PT]) setError(err error) {
-	bsi.errOnce.Do(func() {
-		bsi.err = err
+	if bsi.err.CompareAndSwap(nil, &err) {
 		close(bsi.errReady)
-	})
+	}
 }
 
 func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
