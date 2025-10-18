@@ -3,7 +3,6 @@ package bigsort
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -497,7 +496,7 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 	const totalDataSize = 20 * 1024 * 1024 * 1024 // 20 GB
 	const itemCount = totalDataSize / itemSize
 
-	fmt.Printf("Benchmark will sort approximately %d items (~%.2f GB)\n", itemCount, float64(itemCount*itemSize)/(1024*1024*1024))
+	fmt.Printf("Benchmark will sort approximately %d items (~%.2f GB)", itemCount, float64(itemCount*itemSize)/(1024*1024*1024))
 
 	// Use a small max block size to ensure many blocks are created and merged.
 	const maxBlockSizeBytes = 256 * 1024 * 1024 // 256MB
@@ -507,7 +506,7 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		// Create a temporary directory for this iteration
 		tempDir := b.TempDir()
-		fmt.Printf("Using temporary directory: %s\n", tempDir)
+		fmt.Printf("Using temporary directory: %s", tempDir)
 		baseFactory, err := buffers.NewDirBufferFactory(filepath.Join(tempDir, "buffers"))
 		if err != nil {
 			b.Fatalf("failed to create dir buffer factory: %v", err)

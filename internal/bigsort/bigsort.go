@@ -36,7 +36,7 @@ type BigSorter[T any, PT interface {
 	blockFlushGroup   sync.WaitGroup
 
 	// totalItems is the total number of items added, can be used to check completeness after sorting.
-	totalItems int64
+	totalItems int
 
 	// buffers holds the list of buffers that have been created
 	buffersMu sync.Mutex
@@ -70,7 +70,7 @@ func (bs *BigSorter[T, PT]) Add(data T) error {
 	return nil
 }
 
-func (bs *BigSorter[T, PT]) TotalItems() int64 {
+func (bs *BigSorter[T, PT]) TotalItems() int {
 	return bs.totalItems
 }
 
@@ -206,7 +206,7 @@ type BigSortIterator[T any, PT interface {
 	BigSortable
 }] struct {
 	buffers     []buffers.BufferHandle
-	expectCount int64
+	expectCount int
 
 	// Error handling
 	errOnce  sync.Once
@@ -305,18 +305,23 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 		}
 		heap.Init(&valueHeap)
 
+		read := 0
 		for valueHeap.Len() > 0 {
 			minValSrc := heap.Pop(&valueHeap).(*valueAndSource[T, PT])
+			read++
 			if !yield(minValSrc.Current()) {
-				cancel()
+				read = bsi.expectCount // to avoid error on early stop
 				break
 			}
-
 			if minValSrc.Advance() {
 				heap.Push(&valueHeap, minValSrc)
 			}
 		}
+		cancel()
 		wg.Wait()
+		if read < bsi.expectCount {
+			bsi.setError(fmt.Errorf("iteration stopped early after %d of %d items", read, bsi.expectCount))
+		}
 	}
 }
 
