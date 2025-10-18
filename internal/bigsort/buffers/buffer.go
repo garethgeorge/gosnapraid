@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 	"sync/atomic"
 
 	"github.com/klauspost/compress/zstd"
@@ -25,8 +24,6 @@ type BufferFactory interface {
 
 // inMemoryBufferFactory is a factory for creating in-memory buffers.
 type inMemoryBufferFactory struct {
-	mu      sync.Mutex
-	buffers []*inMemoryBuffer
 }
 
 func NewInMemoryBufferFactory() BufferFactory {
@@ -34,17 +31,10 @@ func NewInMemoryBufferFactory() BufferFactory {
 }
 
 func (p *inMemoryBufferFactory) New() (BufferHandle, error) {
-	buf := &inMemoryBuffer{}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.buffers = append(p.buffers, buf)
-	return buf, nil
+	return &inMemoryBuffer{}, nil
 }
 
 func (p *inMemoryBufferFactory) Release() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.buffers = nil
 	return nil
 }
 

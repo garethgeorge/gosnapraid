@@ -18,18 +18,32 @@ import (
 
 type options struct {
 	maxBufferSizeBytes int64
-	addParallelism     int64
+	addParallelism     int
+	iterChunkSize      int
 }
 
+type Option = func(*options)
+
+// WithMaxBufferSizeBytes sets the maximum size of each buffer block before flushing to storage.
 func WithMaxBufferSizeBytes(size int64) func(*options) {
 	return func(o *options) {
 		o.maxBufferSizeBytes = size
 	}
 }
 
-func WithAddParallelism(parallelism int64) func(*options) {
+// WithAddParallelism sets the number of parallel goroutines used to add blocks.
+func WithAddParallelism(parallelism int) func(*options) {
 	return func(o *options) {
 		o.addParallelism = parallelism
+	}
+}
+
+// WithIterChunkSize sets the number of items to read ahead from each buffer during iteration.
+// Larger chunk sizes can improve performance at the cost of higher memory usage.
+// At most 2 blocks of 'chunkSize' will be held in memory per buffer during iteration. 1 in use and one buffered.
+func WithIterChunkSize(chunkSize int) func(*options) {
+	return func(o *options) {
+		o.iterChunkSize = chunkSize
 	}
 }
 
@@ -51,6 +65,9 @@ type BigSorter[T any, PT interface {
 
 	// maxBlockSizeBytes is the maximum size of each block buffer before flushing to storage
 	maxBlockSizeBytes int64
+
+	// iterChunkSize is the chunk size used during iteration to read items from buffers
+	iterChunkSize int
 
 	// curBlockSizeBytes is the current size of the block being built
 	curBlockMu        sync.Mutex
@@ -77,6 +94,7 @@ func NewBigSorter[T any, PT interface {
 	options := options{
 		maxBufferSizeBytes: 32 * 1024 * 1024, // 32 MB
 		addParallelism:     2,
+		iterChunkSize:      64,
 	}
 
 	for _, opt := range opts {
@@ -86,6 +104,7 @@ func NewBigSorter[T any, PT interface {
 	sorter := &BigSorter[T, PT]{
 		bufferFactory:     factory,
 		maxBlockSizeBytes: options.maxBufferSizeBytes,
+		iterChunkSize:     options.iterChunkSize,
 		addBlockWg:        sync.WaitGroup{},
 		addBlockChan:      make(chan []T),
 	}
@@ -228,9 +247,10 @@ func (bs *BigSorter[T, PT]) SortIter() *BigSortIterator[T, PT] {
 	bs.buffersMu.Lock()
 	defer bs.buffersMu.Unlock()
 	return &BigSortIterator[T, PT]{
-		buffers:     slices.Clone(bs.buffers),
-		expectCount: bs.totalItems,
-		errReady:    make(chan error, 1), // Buffered to prevent blocking
+		buffers:       slices.Clone(bs.buffers),
+		iterChunkSize: bs.iterChunkSize,
+		expectCount:   bs.totalItems,
+		errReady:      make(chan error, 1), // Buffered to prevent blocking
 	}
 }
 
@@ -290,8 +310,9 @@ type BigSortIterator[T any, PT interface {
 	*T
 	BigSortable
 }] struct {
-	buffers     []buffers.BufferHandle
-	expectCount int
+	buffers       []buffers.BufferHandle
+	expectCount   int
+	iterChunkSize int
 
 	// Error handling
 	errReady chan error
@@ -319,14 +340,13 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		const itemChunkSize = 64
 		// Buffer for reusable item chunks to reduce allocations
-		itemChunkReuseChan := make(chan []T, len(bsi.buffers)*4)
+		itemChunkReuseChan := make(chan []T, len(bsi.buffers)*2)
 
 		var wg sync.WaitGroup
 		itemChans := make([]chan []T, len(bsi.buffers))
 		for i := range bsi.buffers {
-			itemChans[i] = make(chan []T, 2)
+			itemChans[i] = make(chan []T, 1) // Buffered to allow one chunk ahead
 			wg.Add(1)
 			go func(i int, bufHandle buffers.BufferHandle) {
 				defer wg.Done()
@@ -347,7 +367,7 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 					case itemChunk = <-itemChunkReuseChan:
 						itemChunk = itemChunk[:0]
 					default:
-						itemChunk = make([]T, 0, itemChunkSize)
+						itemChunk = make([]T, 0, bsi.iterChunkSize)
 					}
 
 					for len(itemChunk) < cap(itemChunk) {

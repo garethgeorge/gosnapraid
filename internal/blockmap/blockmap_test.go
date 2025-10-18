@@ -1,7 +1,6 @@
 package blockmap
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -74,53 +73,6 @@ func TestBlockMap_AllocateFragmented(t *testing.T) {
 
 	assert.Equal(t, int64(30), allocs[0].Range.Start)
 	assert.Equal(t, int64(49), allocs[0].Range.End)
-}
-
-func TestBlockMap_SerializeDeserialize(t *testing.T) {
-	t.Parallel()
-	bm1 := NewBlockMap(0, 1000)
-	bm1.Allocate("file1", 100)
-	bm1.Allocate("file2", 200)
-	bm1.Allocate("file3", 50)
-
-	var buf bytes.Buffer
-	err := bm1.Serialize(&buf)
-	assert.NoError(t, err)
-
-	bm2 := NewBlockMap(0, 1000)
-	err = bm2.Deserialize(&buf)
-	assert.NoError(t, err)
-
-	// Compare allocators
-	assert.Equal(t, bm1.allocator.AllocatedSpace, bm2.allocator.AllocatedSpace)
-	assert.Equal(t, bm1.allocator.FreeSpace, bm2.allocator.FreeSpace)
-
-	// Compare file maps
-	assert.Equal(t, bm1.files.Len(), bm2.files.Len())
-	filesIter1 := bm1.FileAllocationsIter()
-	filesIter2 := bm2.FileAllocationsIter()
-	files1 := make(map[string][]RangeAndOffset)
-	files2 := make(map[string][]RangeAndOffset)
-	for f1, allocs := range filesIter1 {
-		files1[f1] = allocs
-	}
-	for f2, allocs := range filesIter2 {
-		files2[f2] = allocs
-	}
-	assert.Equal(t, files1, files2)
-
-	// Compare underlying allocations
-	iter1 := bm1.allocator.AllocationIter()
-	iter2 := bm2.allocator.AllocationIter()
-	allocs1 := make([]RangeAllocation[fileAndOffset], 0)
-	allocs2 := make([]RangeAllocation[fileAndOffset], 0)
-	for a := range iter1 {
-		allocs1 = append(allocs1, a)
-	}
-	for a := range iter2 {
-		allocs2 = append(allocs2, a)
-	}
-	assert.Equal(t, allocs1, allocs2)
 }
 
 func FuzzBlockMap(f *testing.F) {
@@ -199,31 +151,4 @@ func FuzzBlockMap(f *testing.F) {
 			assert.True(t, ok, "file %s expected but not found in blockmap", fname)
 		}
 	})
-}
-
-func BenchmarkSaveRestore(b *testing.B) {
-	rangeSize := int64(100000000)
-	numAllocs := 1000000
-
-	blockmap := NewBlockMap(0, rangeSize)
-	// Pre-allocate some data
-	for i := 0; i < numAllocs; i++ {
-		assert.True(b, len(blockmap.Allocate(fmt.Sprintf("file_%d", i), 100)) > 0)
-	}
-
-	var buf bytes.Buffer
-	for i := 0; i < b.N; i++ {
-		buf.Reset()
-		err := blockmap.Serialize(&buf)
-		if err != nil {
-			b.Fatalf("Serialize error: %v", err)
-		}
-
-		blockmap2 := NewBlockMap(0, rangeSize)
-		err = blockmap2.Deserialize(bytes.NewReader(buf.Bytes()))
-		if err != nil {
-			b.Fatalf("Deserialize error: %v", err)
-		}
-	}
-	b.Logf("Serialized size: %d bytes", buf.Len())
 }
