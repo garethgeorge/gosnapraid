@@ -3,6 +3,7 @@ package bigsort
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -498,7 +499,6 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 
 	fmt.Printf("Benchmark will sort approximately %d items (~%.2f GB)", itemCount, float64(itemCount*itemSize)/(1024*1024*1024))
 
-	// Use a small max block size to ensure many blocks are created and merged.
 	const maxBlockSizeBytes = 256 * 1024 * 1024 // 256MB
 
 	b.ResetTimer()
@@ -518,10 +518,11 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 
 		// Add items - generate on-the-fly to avoid memory pressure
 		b.Log("Adding items...")
+		var keyBuf [8]byte
 		for i := int64(0); i < itemCount; i++ {
-			key := []byte(fmt.Sprintf("key-%9d"+fmt.Sprintf("%d", keySize-4)+"d", i))
+			binary.BigEndian.PutUint64(keyBuf[:], uint64(i))
 			value := make([]byte, valueSize)
-			item := ByteKeySortable{Key: key, Value: value}
+			item := ByteKeySortable{Key: keyBuf[:], Value: value}
 			if err := sorter.Add(item); err != nil {
 				b.Fatalf("failed to add item: %v", err)
 			}
