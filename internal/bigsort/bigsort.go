@@ -364,8 +364,6 @@ type valueHeap[T any, PT interface {
 func (h valueHeap[T, PT]) Len() int { return len(h) }
 
 func (h valueHeap[T, PT]) Less(i, j int) bool {
-	// CRITICAL: Take pointers to the items *in the slice* for comparison.
-	// This avoids copying and uses the pointer receivers correctly.
 	itemI := PT(&h[i].batch[h[i].idx])
 	itemJ := PT(&h[j].batch[h[j].idx])
 	return itemI.Less(itemJ)

@@ -50,3 +50,34 @@ func (b *ByteKeySortable) Serialize(buf []byte) []byte {
 func (b *ByteKeySortable) Size() int64 {
 	return int64(4 + len(b.Key) + len(b.Value))
 }
+
+type Uint64KeySortable struct {
+	Key   uint64
+	Value []byte
+}
+
+func (u *Uint64KeySortable) Less(other BigSortable) bool {
+	return u.Key < other.(*Uint64KeySortable).Key
+}
+
+func (u *Uint64KeySortable) Deserialize(data []byte) error {
+	if len(data) < 8 {
+		return fmt.Errorf("data too short to deserialize Uint64KeySortable")
+	}
+	u.Key = binary.BigEndian.Uint64(data[:8])
+	u.Value = make([]byte, len(data[8:]))
+	copy(u.Value, data[8:])
+	return nil
+}
+func (u *Uint64KeySortable) Serialize(buf []byte) []byte {
+	if len(buf) < 8+len(u.Value) {
+		buf = make([]byte, 8+len(u.Value))
+	}
+	binary.BigEndian.PutUint64(buf[:8], u.Key)
+	copy(buf[8:], u.Value)
+	return buf[:8+len(u.Value)]
+}
+
+func (u *Uint64KeySortable) Size() int64 {
+	return int64(8 + len(u.Value))
+}

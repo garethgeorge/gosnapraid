@@ -3,6 +3,7 @@ package bigsort
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -482,5 +483,88 @@ func BenchmarkBigSorter_Sort(b *testing.B) {
 		if iteratedCount != itemCount {
 			b.Fatalf("expected %d items, but got %d", itemCount, iteratedCount)
 		}
+	}
+}
+
+func BenchmarkBigSorter_Disk50GB(b *testing.B) {
+	b.ReportAllocs()
+
+	// Use a fixed key and value size for consistent item size
+	const keySize = 32
+	const valueSize = 100
+	// From ByteKeySortable's Serialize method: 2 bytes for key length, 2 for value length
+	const itemSize = int64(4 + keySize + valueSize)
+	const totalDataSize = 20 * 1024 * 1024 * 1024 // 20 GB
+	const itemCount = totalDataSize / itemSize
+
+	fmt.Printf("Benchmark will sort approximately %d items (~%.2f GB)\n", itemCount, float64(itemCount*itemSize)/(1024*1024*1024))
+
+	// Use a small max block size to ensure many blocks are created and merged.
+	const maxBlockSizeBytes = 256 * 1024 * 1024 // 256MB
+
+	b.ResetTimer()
+
+	for n := 0; n < b.N; n++ {
+		// Create a temporary directory for this iteration
+		tempDir := b.TempDir()
+		fmt.Printf("Using temporary directory: %s\n", tempDir)
+		baseFactory, err := buffers.NewDirBufferFactory(filepath.Join(tempDir, "buffers"))
+		if err != nil {
+			b.Fatalf("failed to create dir buffer factory: %v", err)
+		}
+		factory := buffers.NewCompressedBufferFactory(baseFactory)
+		defer factory.Release()
+
+		sorter := NewBigSorter[ByteKeySortable](factory, maxBlockSizeBytes)
+
+		// Add items - generate on-the-fly to avoid memory pressure
+		b.Log("Adding items...")
+		for i := int64(0); i < itemCount; i++ {
+			key := []byte(fmt.Sprintf("key-%9d"+fmt.Sprintf("%d", keySize-4)+"d", i))
+			value := make([]byte, valueSize)
+			item := ByteKeySortable{Key: key, Value: value}
+			if err := sorter.Add(item); err != nil {
+				b.Fatalf("failed to add item: %v", err)
+			}
+			// Log progress every 10 million items
+			if (i+1)%10_000_000 == 0 {
+				b.Logf("Added %d/%d items (%.1f%%)", i+1, itemCount, float64(i+1)/float64(itemCount)*100)
+			}
+		}
+
+		if err := sorter.Flush(); err != nil {
+			b.Fatalf("failed to flush: %v", err)
+		}
+
+		// Sort and verify
+		b.Log("Sorting...")
+		iterator := sorter.SortIter()
+		var prevKey []byte
+		iteratedCount := int64(0)
+		for item := range iterator.Iter() {
+			if prevKey != nil {
+				if bytes.Compare(prevKey, item.Key) > 0 {
+					b.Errorf("output is not sorted")
+					break
+				}
+			}
+			prevKey = slices.Clone(item.Key)
+			iteratedCount++
+
+			// Log progress every 10 million items
+			if iteratedCount%10_000_000 == 0 {
+				b.Logf("Sorted %d/%d items (%.1f%%)", iteratedCount, itemCount, float64(iteratedCount)/float64(itemCount)*100)
+			}
+		}
+
+		if err := iterator.Err(); err != nil {
+			b.Fatalf("iteration failed: %v", err)
+		}
+
+		if iteratedCount != itemCount {
+			b.Fatalf("expected %d items, but got %d", itemCount, iteratedCount)
+		}
+
+		b.Logf("Completed sorting %d items", iteratedCount)
 	}
 }
