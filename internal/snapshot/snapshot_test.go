@@ -26,8 +26,13 @@ func TestCreateAndReadSnapshot(t *testing.T) {
 	writer, err := NewSnapshotWriter(&buf, &gosnapraidpb.SnapshotHeader{Version: 1})
 	require.NoError(t, err)
 
-	err = snapshotter.Create(writer, nil)
+	stats, err := snapshotter.Create(writer, nil)
 	require.NoError(t, err)
+
+	expectedEntries := testutil.CountExpectedEntries(config)
+	assert.Equal(t, expectedEntries, stats.NewOrModified)
+	assert.Equal(t, 0, stats.Unchanged)
+	assert.Equal(t, 0, stats.Errors)
 
 	// 3. Read the snapshot back
 	reader, _, err := NewSnapshotReader(&buf)
@@ -107,8 +112,13 @@ func TestIncrementalSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	snapshotter := NewSnapshotter(mapFS)
-	err = snapshotter.Create(newWriter, priorReader)
+	stats, err := snapshotter.Create(newWriter, priorReader)
 	require.NoError(t, err)
+
+	expectedEntries := testutil.CountExpectedEntries(config)
+	assert.Equal(t, 3, stats.NewOrModified)
+	assert.Equal(t, expectedEntries-3, stats.Unchanged)
+	assert.Equal(t, 0, stats.Errors)
 
 	// 5. Verify the new snapshot
 	newReader, _, err := NewSnapshotReader(&newBuf)

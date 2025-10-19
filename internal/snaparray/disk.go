@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/garethgeorge/gosnapraid/internal/blockmap"
 	"github.com/garethgeorge/gosnapraid/internal/progress"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot"
 	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
@@ -103,30 +104,19 @@ func (d *Disk) verifySnapshots(dirs []string, prog progress.BarProgressTracker) 
 // UpdateSnapshots updates the snapshots for the disk across all snapshot directories
 // where the content manifest should be stored.
 // Returns a function that can be used to finalize the snapshot update (e.g., renaming temp files).
-func (d *Disk) updateSnapshotsHelper(dirs []string, prior string, prog progress.SpinnerProgressTracker) (func() error, error) {
+func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.SpinnerProgressTracker) (snapshot.SnapshotStats, func() error, error) {
 	// If provided, load and use the prior snapshot
 	var priorSnapshotReader *snapshot.SnapshotReader
 	if prior != "" {
-		f, err := os.Open(prior)
+		compressed, err := openCompressedSnapshotFile(prior)
 		if err != nil {
-			return nil, fmt.Errorf("open prior snapshot %s: %w", prior, err)
+			return snapshot.SnapshotStats{}, nil, fmt.Errorf("open prior snapshot: %w", err)
 		}
-		defer f.Close()
-
-		zstdReader, err := zstd.NewReader(f)
-		if err != nil {
-			return nil, fmt.Errorf("create zstd reader for prior snapshot %s: %w", prior, err)
+		defer compressed.Close()
+		if compressed.Header.Version != Version {
+			return snapshot.SnapshotStats{}, nil, fmt.Errorf("prior snapshot version %d does not match current version %d", compressed.Header.Version, Version)
 		}
-		defer zstdReader.Close()
-
-		priorReader, header, err := snapshot.NewSnapshotReader(zstdReader)
-		if err != nil {
-			return nil, fmt.Errorf("create snapshot reader for prior snapshot %s: %w", prior, err)
-		}
-		if header.Version != Version {
-			return nil, fmt.Errorf("prior snapshot %s has incompatible version %d", prior, header.Version)
-		}
-		priorSnapshotReader = priorReader
+		priorSnapshotReader = compressed.Reader
 	}
 
 	prog.SetMessage("updating snapshots for disk " + d.ID)
@@ -144,7 +134,7 @@ func (d *Disk) updateSnapshotsHelper(dirs []string, prior string, prog progress.
 
 		f, err := os.Create(path)
 		if err != nil {
-			return nil, fmt.Errorf("create snapshot file: %w", err)
+			return snapshot.SnapshotStats{}, nil, fmt.Errorf("create snapshot file: %w", err)
 		}
 		eg.Go(func() error {
 			defer piper.Close()
@@ -163,36 +153,37 @@ func (d *Disk) updateSnapshotsHelper(dirs []string, prior string, prog progress.
 		zstd.WithEncoderConcurrency(4),
 		zstd.WithEncoderLevel(zstd.SpeedDefault))
 	if err != nil {
-		return nil, fmt.Errorf("create zstd writer: %w", err)
+		return snapshot.SnapshotStats{}, nil, fmt.Errorf("create zstd writer: %w", err)
 	}
 	defer zstdWriter.Close()
 	bufioWriter := bufio.NewWriterSize(zstdWriter, 256*1024) // 256KB buffer for efficiency
 
-	if err := d.writeSnapshotHelper(bufioWriter, priorSnapshotReader); err != nil {
-		return nil, fmt.Errorf("write snapshot: %w", err)
+	stats, err := d.writeSnapshotHelper(bufioWriter, priorSnapshotReader)
+	if err != nil {
+		return stats, nil, fmt.Errorf("write snapshot: %w", err)
 	}
 
 	// Flush and close the writers
 	if err := bufioWriter.Flush(); err != nil {
-		return nil, fmt.Errorf("flush buffer: %w", err)
+		return stats, nil, fmt.Errorf("flush buffer: %w", err)
 	}
 	if err := zstdWriter.Close(); err != nil {
-		return nil, fmt.Errorf("close zstd writer: %w", err)
+		return stats, nil, fmt.Errorf("close zstd writer: %w", err)
 	}
 
 	// Close all pipe writers underlying the multiwriter
 	for _, closer := range closers {
 		if err := closer.Close(); err != nil {
-			return nil, fmt.Errorf("close pipe writer: %w", err)
+			return stats, nil, fmt.Errorf("close pipe writer: %w", err)
 		}
 	}
 
 	// Wait for all snapshot writes to complete
 	if err := eg.Wait(); err != nil {
-		return nil, fmt.Errorf("wait for snapshot writes: %w", err)
+		return stats, nil, fmt.Errorf("wait for snapshot writes: %w", err)
 	}
 
-	return func() error {
+	return stats, func() error {
 		for _, dir := range dirs {
 			tmpPath := d.snapshotPath(dir) + ".tmp"
 			finalPath := d.snapshotPath(dir)
@@ -204,7 +195,7 @@ func (d *Disk) updateSnapshotsHelper(dirs []string, prior string, prog progress.
 	}, nil
 }
 
-func (d *Disk) writeSnapshotHelper(writer io.Writer, prior *snapshot.SnapshotReader) error {
+func (d *Disk) writeSnapshotHelper(writer io.Writer, prior *snapshot.SnapshotReader) (snapshot.SnapshotStats, error) {
 	// create snapshotter
 	snapshotter := snapshot.NewSnapshotter(d.FS)
 
@@ -214,13 +205,40 @@ func (d *Disk) writeSnapshotHelper(writer io.Writer, prior *snapshot.SnapshotRea
 		Timestamp: uint64(time.Now().UnixNano()),
 	})
 	if err != nil {
-		return fmt.Errorf("create snapshot writer: %w", err)
+		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot writer: %w", err)
 	}
 
 	// create the snapshot
-	if err := snapshotter.Create(snapshotWriter, prior); err != nil {
-		return fmt.Errorf("create snapshot: %w", err)
+	stats, err := snapshotter.Create(snapshotWriter, prior)
+	if err != nil {
+		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	return nil
+	return stats, nil
+}
+
+func (d *Disk) loadAllocationMap(snapshot string) (*blockmap.RangeAllocator[struct{}], error) {
+	compressed, err := openCompressedSnapshotFile(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("open snapshot file %s: %w", snapshot, err)
+	}
+	defer compressed.Close()
+
+	rangealloc := blockmap.NewRangeAllocator[struct{}](0, 1<<63-1) // Use max int64 as upper bound
+	snapshotReader := compressed.Reader
+	for entry, err := range snapshotReader.Iter() {
+		if err != nil {
+			return nil, fmt.Errorf("iterate snapshot entries: %w", err)
+		}
+
+		for i := 0; i < len(entry.SliceRangeStarts) && i < len(entry.SliceRangeEnds); i++ {
+			start := entry.SliceRangeStarts[i]
+			end := entry.SliceRangeEnds[i]
+			if !rangealloc.SetAllocated(int64(start), int64(end), struct{}{}) {
+				return nil, fmt.Errorf("block range overlap detected for file %s at offset %d length %d", entry.Path, start, end)
+			}
+		}
+	}
+
+	return rangealloc, nil
 }

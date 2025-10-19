@@ -14,6 +14,12 @@ import (
 	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
 )
 
+type SnapshotStats struct {
+	Unchanged     int
+	NewOrModified int
+	Errors        int
+}
+
 type Snapshotter struct {
 	fs       fs.FS
 	hashFunc gosnapraidpb.HashType
@@ -26,7 +32,14 @@ func NewSnapshotter(fs fs.FS) *Snapshotter {
 	}
 }
 
-func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader) error {
+// TOOD: implement move detection by storing by hash
+// in particular the fileformat will simply be [hashhi, hashlo, proto size, <encoded proto>]
+//  1. load old snapshot and sort it into path major order
+//  2. generate new snapshot and add entries to a hash sorter as already encoded byte segments.
+//  3. after snapshot is generated, zip it with the old snapshot. Merge logic is a bit complicated when there are two values
+//     for the same hash (ie moved files).
+//  4. write out snapshot in hash sorted order.
+func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader) (SnapshotStats, error) {
 	dirTreeIter := fsscan.WalkFS(s.fs)
 	oldSnapshotIter := emptySnapshotIter()
 	if oldSnapshot != nil {
@@ -48,9 +61,16 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 		return 0
 	})
 
+	var stats SnapshotStats
+
 	for diskFile, oldSnapshotItem := range leftJoin {
 		if oldSnapshotItem.Error != nil {
-			return fmt.Errorf("reading old snapshot: %w", oldSnapshotItem.Error)
+			return stats, fmt.Errorf("reading old snapshot: %w", oldSnapshotItem.Error)
+		}
+
+		if diskFile.Error != nil {
+			stats.Errors++
+			continue
 		}
 
 		node := gosnapraidpb.SnapshotNode{
@@ -68,22 +88,24 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 			node.Hashtype = oldSnapshotItem.Value.Hashtype
 			node.Hashhi = oldSnapshotItem.Value.Hashhi
 			node.Hashlo = oldSnapshotItem.Value.Hashlo
+			stats.Unchanged++
 		} else {
 			// New or changed file, if it's an ordinary file try to read it and populate the hash
 			if diskFile.Mode.IsRegular() {
 				err := s.populateFileHash(diskFile.Path, &node)
 				if err != nil {
-					return fmt.Errorf("hashing file %q: %w", diskFile.Path, err)
+					return stats, fmt.Errorf("hashing file %q: %w", diskFile.Path, err)
 				}
 			}
+			stats.NewOrModified++
 		}
 
 		err := writer.Write(&node)
 		if err != nil {
-			return fmt.Errorf("write node %q: %w", diskFile.Path, err)
+			return stats, fmt.Errorf("write node %q: %w", diskFile.Path, err)
 		}
 	}
-	return nil
+	return stats, nil
 }
 
 func (s *Snapshotter) populateFileHash(path string, node *gosnapraidpb.SnapshotNode) error {

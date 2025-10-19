@@ -484,7 +484,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 			iNdEx += 8
 		case 8:
 			if wireType == 0 {
-				var v uint32
+				var v uint64
 				for shift := uint(0); ; shift += 7 {
 					if shift >= 64 {
 						return protohelpers.ErrIntOverflow
@@ -494,7 +494,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 					}
 					b := dAtA[iNdEx]
 					iNdEx++
-					v |= uint32(b&0x7F) << shift
+					v |= uint64(b&0x7F) << shift
 					if b < 0x80 {
 						break
 					}
@@ -535,10 +535,10 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 				}
 				elementCount = count
 				if elementCount != 0 && len(m.SliceRangeStarts) == 0 && cap(m.SliceRangeStarts) < elementCount {
-					m.SliceRangeStarts = make([]uint32, 0, elementCount)
+					m.SliceRangeStarts = make([]uint64, 0, elementCount)
 				}
 				for iNdEx < postIndex {
-					var v uint32
+					var v uint64
 					for shift := uint(0); ; shift += 7 {
 						if shift >= 64 {
 							return protohelpers.ErrIntOverflow
@@ -548,7 +548,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 						}
 						b := dAtA[iNdEx]
 						iNdEx++
-						v |= uint32(b&0x7F) << shift
+						v |= uint64(b&0x7F) << shift
 						if b < 0x80 {
 							break
 						}
@@ -560,7 +560,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 			}
 		case 9:
 			if wireType == 0 {
-				var v uint32
+				var v uint64
 				for shift := uint(0); ; shift += 7 {
 					if shift >= 64 {
 						return protohelpers.ErrIntOverflow
@@ -570,7 +570,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 					}
 					b := dAtA[iNdEx]
 					iNdEx++
-					v |= uint32(b&0x7F) << shift
+					v |= uint64(b&0x7F) << shift
 					if b < 0x80 {
 						break
 					}
@@ -611,10 +611,10 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 				}
 				elementCount = count
 				if elementCount != 0 && len(m.SliceRangeEnds) == 0 && cap(m.SliceRangeEnds) < elementCount {
-					m.SliceRangeEnds = make([]uint32, 0, elementCount)
+					m.SliceRangeEnds = make([]uint64, 0, elementCount)
 				}
 				for iNdEx < postIndex {
-					var v uint32
+					var v uint64
 					for shift := uint(0); ; shift += 7 {
 						if shift >= 64 {
 							return protohelpers.ErrIntOverflow
@@ -624,7 +624,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 						}
 						b := dAtA[iNdEx]
 						iNdEx++
-						v |= uint32(b&0x7F) << shift
+						v |= uint64(b&0x7F) << shift
 						if b < 0x80 {
 							break
 						}

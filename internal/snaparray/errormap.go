@@ -7,7 +7,7 @@ type ErrorMap struct {
 	Errors map[string]error
 }
 
-func (e ErrorMap) Error() string {
+func (e *ErrorMap) Error() string {
 	if len(e.Errors) == 0 {
 		return ""
 	}
@@ -28,13 +28,13 @@ func (e ErrorMap) Error() string {
 	return builder.String()
 }
 
-func (e ErrorMap) AddError(path string, err error) {
+func (e *ErrorMap) AddError(path string, err error) {
 	if e.Errors == nil {
 		e.Errors = make(map[string]error)
 	}
 	e.Errors[path] = err
 }
 
-func (e ErrorMap) HasErrors() bool {
+func (e *ErrorMap) HasErrors() bool {
 	return len(e.Errors) > 0
 }

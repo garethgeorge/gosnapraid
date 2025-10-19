@@ -18,7 +18,7 @@ func snapshotForConfig(config testutil.TreeConfig) []byte {
 		panic("failed to create snapshot writer: " + err.Error())
 	}
 
-	err = snapshotter.Create(writer, nil)
+	_, err = snapshotter.Create(writer, nil)
 	if err != nil {
 		panic("failed to create snapshot: " + err.Error())
 	}
@@ -56,8 +56,18 @@ func FuzzSnapshotterCreate(f *testing.F) {
 		}
 
 		snapshotter := NewSnapshotter(mapFS)
-		if err := snapshotter.Create(newWriter, priorReader); err != nil {
-			t.Fatalf("snapshot creation failed: %v", err)
+		stats, err := snapshotter.Create(newWriter, priorReader)
+		if err != nil {
+			// This is ok, the fuzzer can provide bad prior snapshot data
+			return
+		}
+
+		expectedEntries := testutil.CountExpectedEntries(config)
+		if expectedEntries != stats.NewOrModified+stats.Unchanged {
+			t.Errorf("stats mismatch: expected %d total entries, got %d", expectedEntries, stats.NewOrModified+stats.Unchanged)
+		}
+		if stats.Errors != 0 {
+			t.Errorf("expected 0 errors, got %d", stats.Errors)
 		}
 	})
 }
