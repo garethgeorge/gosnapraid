@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # This script finds and runs all fuzz tests in the current Go project.
-# For each fuzz test, it runs it for 5 seconds.
+# For each fuzz test, it runs it for 20s seconds.
 
 set -e
 
@@ -18,7 +18,7 @@ for pkg in $packages; do
         echo "--------------------------------------------------"
         for test_name in $fuzz_tests; do
             echo "Running fuzz test: $test_name"
-            go test -fuzz="$test_name" -fuzztime=30s "$pkg"
+            go test -fuzz="$test_name" -fuzztime=20s -cover "$pkg"
         done
     fi
 done

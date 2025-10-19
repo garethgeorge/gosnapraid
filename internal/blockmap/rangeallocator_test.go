@@ -182,6 +182,9 @@ func FuzzRangeAllocator(f *testing.F) {
 	f.Add(int64(10000), int64(10000), seedBase+2)
 
 	f.Fuzz(func(t *testing.T, rangeSize, operationCount, seed int64) {
+		if rangeSize <= 0 || operationCount <= 0 || operationCount > 10000 {
+			t.Skip("Invalid range size or operation count")
+		}
 
 		rng := rand.New(rand.NewSource(int64(seed)))
 		allocator := NewRangeAllocator[string](0, rangeSize)
@@ -195,7 +198,7 @@ func FuzzRangeAllocator(f *testing.F) {
 
 			switch op {
 			case 0: // Allocate
-				size := rng.Int63n(rangeSize/100) + 1
+				size := rng.Int63n(rangeSize/100+1) + 1
 				data := fmt.Sprintf("alloc_%d", i)
 				start, end := allocator.Allocate(size, data)
 				if end >= start { // successful allocation
@@ -214,8 +217,8 @@ func FuzzRangeAllocator(f *testing.F) {
 					delete(expectedAllocs, key)
 				}
 			case 2: // SetAllocated
-				start := rng.Int63n(rangeSize)
-				size := rng.Int63n(rangeSize/10) + 1
+				start := rng.Int63n(rangeSize + 1)
+				size := rng.Int63n(rangeSize/10+1) + 1
 				end := start + size - 1
 				if end >= rangeSize {
 					end = rangeSize - 1

@@ -1,14 +1,23 @@
-package snapraid
-
-import "io/fs"
-
-// Disk represents a single disk in the SnapRAID array.
-type Disk struct {
-	Path string // Filesystem path to identify the disk
-	FS   fs.FS  // Filesystem interface for disk operations
-}
+package snaparray
 
 type Array struct {
-	Data   []*Disk
-	Parity []*Disk
+	Data         []*Disk
+	ParityFiles  []string
+	SnapshotDirs []string
+}
+
+func NewArray(dataDisks []*Disk, parityFiles, snapshotDirs []string) *Array {
+	return &Array{
+		Data:         dataDisks,
+		ParityFiles:  parityFiles,
+		SnapshotDirs: snapshotDirs,
+	}
+}
+
+func (a *Array) GetDataDisks() []*Disk {
+	return a.Data
+}
+
+func (a *Array) GetParityFiles() []string {
+	return a.ParityFiles
 }

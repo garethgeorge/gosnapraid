@@ -109,19 +109,14 @@ func (sr *SnapshotReader) readHeader() (*gosnapraidpb.SnapshotHeader, error) {
 }
 
 // Iter returns an iterator that yields references to SnapshotNodes.
-// Nodes are allocated in batches of 1024 for better performance.
-// The yielded nodes are only valid until the next iteration.
+// The caller must not retain references to the yielded nodes beyond
+// the scope of the yield function, as the same memory is reused.
 func (sr *SnapshotReader) Iter() iter.Seq2[*gosnapraidpb.SnapshotNode, error] {
-	const batchSize = 1024
-
 	return func(yield func(*gosnapraidpb.SnapshotNode, error) bool) {
-		// Pre-allocate a batch of nodes
-		nodes := make([]gosnapraidpb.SnapshotNode, batchSize)
-		nodeIdx := 0
+		node := new(gosnapraidpb.SnapshotNode)
 
 		for {
-			// Get the current node from the batch
-			node := &nodes[nodeIdx]
+			node.Reset()
 
 			// Read the size prefix
 			var sizeBuf [2]byte
@@ -160,9 +155,6 @@ func (sr *SnapshotReader) Iter() iter.Seq2[*gosnapraidpb.SnapshotNode, error] {
 			if !yield(node, nil) {
 				return // Consumer stopped iteration
 			}
-
-			// Move to next slot in batch, wrapping around
-			nodeIdx = (nodeIdx + 1) % batchSize
 		}
 	}
 }

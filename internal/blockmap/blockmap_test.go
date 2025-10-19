@@ -87,6 +87,9 @@ func FuzzBlockMap(f *testing.F) {
 		if totalSize <= 0 || totalSize > 20000 {
 			t.Skip("Invalid total size")
 		}
+		if operationCount <= 0 || operationCount > 10000 {
+			t.Skip("Invalid operation count")
+		}
 
 		rng := rand.New(rand.NewSource(int64(seed)))
 		bm := NewBlockMap(0, totalSize-1)
@@ -101,7 +104,7 @@ func FuzzBlockMap(f *testing.F) {
 			switch op {
 			case 0: // Allocate
 				fname := fmt.Sprintf("file_%d", rng.Intn(20)) // limited number of files
-				size := rng.Int63n(totalSize/operationCount*10) + 1
+				size := rng.Int63n(totalSize/operationCount*10+1) + 1
 				if _, exists := expectedFiles[fname]; exists {
 					// Don't re-allocate for a file that already exists in our simple model
 					continue
