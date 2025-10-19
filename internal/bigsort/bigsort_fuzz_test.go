@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/garethgeorge/gosnapraid/internal/bigsort/buffers"
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 )
 
 func FuzzBigSorterConfigs(f *testing.F) {

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/garethgeorge/gosnapraid/internal/bigsort/buffers"
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 	"github.com/garethgeorge/gosnapraid/internal/poolutil"
 )
 

@@ -45,6 +45,10 @@ type fileBuffer struct {
 	fpath string
 }
 
+func (f *fileBuffer) Name() string {
+	return f.fpath
+}
+
 func (f *fileBuffer) GetWriter() (io.WriteCloser, error) {
 	fh, err := os.OpenFile(f.fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -59,14 +63,4 @@ func (f *fileBuffer) GetReader() (io.ReadCloser, error) {
 		return nil, err
 	}
 	return fh, nil
-}
-
-// closeForwarder allows forwarding close calls to a base closer
-type closeForwarder struct {
-	base io.Closer
-	io.Reader
-}
-
-func (c *closeForwarder) Close() error {
-	return c.base.Close()
 }

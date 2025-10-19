@@ -28,6 +28,10 @@ type inMemoryBuffer struct {
 
 var _ io.WriteCloser = (*inMemoryBuffer)(nil)
 
+func (b *inMemoryBuffer) Name() string {
+	return "inmemory"
+}
+
 func (b *inMemoryBuffer) GetReader() (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b.data)), nil
 }

@@ -10,6 +10,7 @@ import (
 type BufferHandle interface {
 	GetReader() (io.ReadCloser, error)
 	GetWriter() (io.WriteCloser, error)
+	Name() string
 }
 
 // bufferFactory is a factory for creating bufferHandles and can release any resources when done.

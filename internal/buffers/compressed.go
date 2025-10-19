@@ -1,6 +1,7 @@
 package buffers
 
 import (
+	"bufio"
 	"io"
 
 	"github.com/klauspost/compress/zstd"
@@ -34,6 +35,10 @@ type compressedBufferHandle struct {
 	base BufferHandle
 }
 
+func (h *compressedBufferHandle) Name() string {
+	return "zstd+" + h.base.Name()
+}
+
 func (h *compressedBufferHandle) GetReader() (io.ReadCloser, error) {
 	baseReader, err := h.base.GetReader()
 	if err != nil {
@@ -43,9 +48,13 @@ func (h *compressedBufferHandle) GetReader() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &closeForwarder{
-		base:   baseReader,
-		Reader: zstdReader,
+	bufioReader := bufio.NewReaderSize(zstdReader, 64*1024)
+	return &readerCloseForwarder{
+		closers: []func() error{func() error {
+			zstdReader.Close()
+			return nil
+		}, baseReader.Close},
+		Reader: bufioReader,
 	}, nil
 }
 
@@ -54,12 +63,18 @@ func (h *compressedBufferHandle) GetWriter() (io.WriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	bufioWriter := bufio.NewWriterSize(baseWriter, 64*1024)
+
 	zstdWriter, err := zstd.NewWriter(
-		baseWriter,
+		bufioWriter,
+		zstd.WithEncoderCRC(true),
 		zstd.WithEncoderConcurrency(2),
 		zstd.WithEncoderLevel(zstd.SpeedFastest))
 	if err != nil {
 		return nil, err
 	}
-	return zstdWriter, nil
+	return &writerCloseForwarder{
+		closers:     []func() error{zstdWriter.Close, bufioWriter.Flush, baseWriter.Close},
+		WriteCloser: zstdWriter,
+	}, nil
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/garethgeorge/gosnapraid/internal/blockmap"
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 	"github.com/garethgeorge/gosnapraid/internal/progress"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot"
 	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
@@ -101,24 +102,36 @@ func (d *Disk) verifySnapshots(dirs []string, prog progress.BarProgressTracker) 
 	return "", nil
 }
 
+func (d *Disk) updateSnapshots(outputsDirs []string, prior string, prog progress.SpinnerProgressTracker) (snapshot.SnapshotStats, error) {
+	// Create the buffer handles for each potential output
+	var bufs []buffers.BufferHandle
+	for _, dir := range outputsDirs {
+		path := d.snapshotPath(dir)
+		bufHandle := buffers.CompressedBufferHandle(buffers.BufferHandleFromFile(path))
+		bufs = append(bufs, bufHandle)
+	}
+
+	var priorBuf buffers.BufferHandle
+	if prior != "" {
+		priorBuf = buffers.CompressedBufferHandle(buffers.BufferHandleFromFile(prior))
+	}
+
+	stats, finalize, err := d.updateSnapshotsHelper(bufs, priorBuf, prog)
+	if err != nil {
+		return stats, fmt.Errorf("update snapshots: %w", err)
+	}
+
+	// Finalize the snapshot update (e.g., rename temp files)
+	if err := finalize(); err != nil {
+		return stats, fmt.Errorf("finalize snapshot update: %w", err)
+	}
+	return stats, nil
+}
+
 // UpdateSnapshots updates the snapshots for the disk across all snapshot directories
 // where the content manifest should be stored.
 // Returns a function that can be used to finalize the snapshot update (e.g., renaming temp files).
-func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.SpinnerProgressTracker) (snapshot.SnapshotStats, func() error, error) {
-	// If provided, load and use the prior snapshot
-	var priorSnapshotReader *snapshot.SnapshotReader
-	if prior != "" {
-		compressed, err := openCompressedSnapshotFile(prior)
-		if err != nil {
-			return snapshot.SnapshotStats{}, nil, fmt.Errorf("open prior snapshot: %w", err)
-		}
-		defer compressed.Close()
-		if compressed.Header.Version != Version {
-			return snapshot.SnapshotStats{}, nil, fmt.Errorf("prior snapshot version %d does not match current version %d", compressed.Header.Version, Version)
-		}
-		priorSnapshotReader = compressed.Reader
-	}
-
+func (d *Disk) updateSnapshotsHelper(outbuffers []buffers.BufferHandle, prior buffers.BufferHandle, prog progress.SpinnerProgressTracker) (snapshot.SnapshotStats, func() error, error) {
 	prog.SetMessage("updating snapshots for disk " + d.ID)
 
 	// Create pipes for each snapshot writer
@@ -126,21 +139,21 @@ func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.Spinne
 	var writers []io.Writer
 	var closers []io.Closer
 
-	for _, dir := range dirs {
-		path := d.snapshotPath(dir) + ".tmp"
+	for _, buf := range outbuffers {
 		piper, pipew := io.Pipe()
+		w, err := buf.GetWriter()
+		if err != nil {
+			return snapshot.SnapshotStats{}, nil, fmt.Errorf("get snapshot writer for buffer: %w", err)
+		}
+
 		writers = append(writers, pipew)
 		closers = append(closers, pipew)
 
-		f, err := os.Create(path)
-		if err != nil {
-			return snapshot.SnapshotStats{}, nil, fmt.Errorf("create snapshot file: %w", err)
-		}
 		eg.Go(func() error {
 			defer piper.Close()
-			defer f.Close()
-			if _, err := io.Copy(f, piper); err != nil {
-				fmt.Printf("error writing snapshot to %s: %v\n", path, err)
+			defer w.Close()
+			if _, err := io.Copy(w, piper); err != nil {
+				fmt.Printf("error writing snapshot to %s: %v\n", buf.Name(), err)
 			}
 			return nil
 		})
@@ -158,7 +171,7 @@ func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.Spinne
 	defer zstdWriter.Close()
 	bufioWriter := bufio.NewWriterSize(zstdWriter, 256*1024) // 256KB buffer for efficiency
 
-	stats, err := d.writeSnapshotHelper(bufioWriter, priorSnapshotReader)
+	stats, err := d.writeSnapshotHelper(bufioWriter, prior)
 	if err != nil {
 		return stats, nil, fmt.Errorf("write snapshot: %w", err)
 	}
@@ -184,7 +197,7 @@ func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.Spinne
 	}
 
 	return stats, func() error {
-		for _, dir := range dirs {
+		for _, dir := range outputs {
 			tmpPath := d.snapshotPath(dir) + ".tmp"
 			finalPath := d.snapshotPath(dir)
 			if err := os.Rename(tmpPath, finalPath); err != nil {
@@ -195,7 +208,7 @@ func (d *Disk) updateSnapshots(dirs []string, prior string, prog progress.Spinne
 	}, nil
 }
 
-func (d *Disk) writeSnapshotHelper(writer io.Writer, prior *snapshot.SnapshotReader) (snapshot.SnapshotStats, error) {
+func (d *Disk) writeSnapshotHelper(writer io.Writer, prior buffers.BufferHandle) (snapshot.SnapshotStats, error) {
 	// create snapshotter
 	snapshotter := snapshot.NewSnapshotter(d.FS)
 
@@ -208,8 +221,44 @@ func (d *Disk) writeSnapshotHelper(writer io.Writer, prior *snapshot.SnapshotRea
 		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot writer: %w", err)
 	}
 
+	// reopen prior snapshot and populate dedupe tree
+	if prior != nil {
+		priorReadCloser, err := prior.GetReader()
+		if err != nil {
+			return snapshot.SnapshotStats{}, fmt.Errorf("get prior snapshot reader: %w", err)
+		}
+		defer priorReadCloser.Close()
+		reader, header, err := snapshot.NewSnapshotReader(priorReadCloser)
+		if err != nil {
+			return snapshot.SnapshotStats{}, fmt.Errorf("open prior snapshot: %w", err)
+		}
+		if header.Version != Version {
+			return snapshot.SnapshotStats{}, fmt.Errorf("prior snapshot version %d does not match current version %d", header.Version, Version)
+		}
+		err = snapshotter.UseMoveDetection(reader)
+		if err != nil {
+			return snapshot.SnapshotStats{}, fmt.Errorf("enable move detection: %w", err)
+		}
+		priorReadCloser.Close()
+	}
+
+	// open prior snapshot for the diffing scan
+	var priorSnapshot *snapshot.SnapshotReader
+	if prior != nil {
+		priorReadCloser, err := prior.GetReader()
+		if err != nil {
+			return snapshot.SnapshotStats{}, fmt.Errorf("get prior snapshot reader: %w", err)
+		}
+		defer priorReadCloser.Close()
+		reader, _, err := snapshot.NewSnapshotReader(priorReadCloser)
+		if err != nil {
+			return snapshot.SnapshotStats{}, fmt.Errorf("open prior snapshot: %w", err)
+		}
+		priorSnapshot = reader
+	}
+
 	// create the snapshot
-	stats, err := snapshotter.Create(snapshotWriter, prior)
+	stats, err := snapshotter.Create(snapshotWriter, priorSnapshot)
 	if err != nil {
 		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot: %w", err)
 	}

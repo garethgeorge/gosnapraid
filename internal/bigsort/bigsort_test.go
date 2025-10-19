@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/garethgeorge/gosnapraid/internal/bigsort/buffers"
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 )
 
 func generateItems(t *testing.T, count int, keySize int) ([]ByteKeySortable, int64) {
