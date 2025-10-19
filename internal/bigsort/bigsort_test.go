@@ -438,8 +438,8 @@ func BenchmarkBigSorter_Sort(b *testing.B) {
 	b.ReportAllocs()
 
 	// Use a fixed key and value size for consistent item size
-	const keySize = 32
-	const valueSize = 100
+	const keySize = 128
+	const valueSize = 2
 	// From ByteKeySortable's Serialize method: 2 bytes for key length, 2 for value length
 	const itemSize = int64(4 + keySize + valueSize)
 	const totalDataSize = 5 * 1024 * 1024 * 1024 // 5 GB
@@ -520,7 +520,7 @@ func BenchmarkBigSorter_Disk50GB(b *testing.B) {
 		b.Log("Adding items...")
 		var keyBuf [8]byte
 		for i := int64(0); i < itemCount; i++ {
-			binary.BigEndian.PutUint64(keyBuf[:], uint64(i))
+			binary.LittleEndian.PutUint64(keyBuf[:], uint64(i))
 			value := make([]byte, valueSize)
 			item := ByteKeySortable{Key: keyBuf[:], Value: value}
 			if err := sorter.Add(item); err != nil {

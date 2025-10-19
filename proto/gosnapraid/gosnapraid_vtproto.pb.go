@@ -5,10 +5,12 @@
 package gosnapraidpb
 
 import (
+	binary "encoding/binary"
 	fmt "fmt"
+	io "io"
+
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	io "io"
 )
 
 const (
@@ -18,7 +20,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-func (m *FileMetadata) MarshalVT() (dAtA []byte, err error) {
+func (m *SnapshotHeader) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -31,12 +33,55 @@ func (m *FileMetadata) MarshalVT() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *FileMetadata) MarshalToVT(dAtA []byte) (int, error) {
+func (m *SnapshotHeader) MarshalToVT(dAtA []byte) (int, error) {
 	size := m.SizeVT()
 	return m.MarshalToSizedBufferVT(dAtA[:size])
 }
 
-func (m *FileMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+func (m *SnapshotHeader) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.unknownFields != nil {
+		i -= len(m.unknownFields)
+		copy(dAtA[i:], m.unknownFields)
+	}
+	if m.Timestamp != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Timestamp))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Version != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Version))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SnapshotNode) MarshalVT() (dAtA []byte, err error) {
+	if m == nil {
+		return nil, nil
+	}
+	size := m.SizeVT()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBufferVT(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SnapshotNode) MarshalToVT(dAtA []byte) (int, error) {
+	size := m.SizeVT()
+	return m.MarshalToSizedBufferVT(dAtA[:size])
+}
+
+func (m *SnapshotNode) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m == nil {
 		return 0, nil
 	}
@@ -89,14 +134,16 @@ func (m *FileMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		dAtA[i] = 0x42
 	}
 	if m.Hashlo != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Hashlo))
+		i -= 8
+		binary.LittleEndian.PutUint64(dAtA[i:], uint64(m.Hashlo))
 		i--
-		dAtA[i] = 0x38
+		dAtA[i] = 0x39
 	}
 	if m.Hashhi != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Hashhi))
+		i -= 8
+		binary.LittleEndian.PutUint64(dAtA[i:], uint64(m.Hashhi))
 		i--
-		dAtA[i] = 0x30
+		dAtA[i] = 0x31
 	}
 	if m.Hashtype != 0 {
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Hashtype))
@@ -128,7 +175,23 @@ func (m *FileMetadata) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *FileMetadata) SizeVT() (n int) {
+func (m *SnapshotHeader) SizeVT() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Version != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.Version))
+	}
+	if m.Timestamp != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.Timestamp))
+	}
+	n += len(m.unknownFields)
+	return n
+}
+
+func (m *SnapshotNode) SizeVT() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -151,10 +214,10 @@ func (m *FileMetadata) SizeVT() (n int) {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Hashtype))
 	}
 	if m.Hashhi != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.Hashhi))
+		n += 9
 	}
 	if m.Hashlo != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.Hashlo))
+		n += 9
 	}
 	if len(m.SliceRangeStarts) > 0 {
 		l = 0
@@ -174,7 +237,7 @@ func (m *FileMetadata) SizeVT() (n int) {
 	return n
 }
 
-func (m *FileMetadata) UnmarshalVT(dAtA []byte) error {
+func (m *SnapshotHeader) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -197,10 +260,99 @@ func (m *FileMetadata) UnmarshalVT(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: FileMetadata: wiretype end group for non-group")
+			return fmt.Errorf("proto: SnapshotHeader: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: FileMetadata: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: SnapshotHeader: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Version", wireType)
+			}
+			m.Version = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Version |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Timestamp", wireType)
+			}
+			m.Timestamp = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Timestamp |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.unknownFields = append(m.unknownFields, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return protohelpers.ErrIntOverflow
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SnapshotNode: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SnapshotNode: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -312,43 +464,25 @@ func (m *FileMetadata) UnmarshalVT(dAtA []byte) error {
 				}
 			}
 		case 6:
-			if wireType != 0 {
+			if wireType != 1 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Hashhi", wireType)
 			}
 			m.Hashhi = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.Hashhi |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
 			}
+			m.Hashhi = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
 		case 7:
-			if wireType != 0 {
+			if wireType != 1 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Hashlo", wireType)
 			}
 			m.Hashlo = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.Hashlo |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
+			if (iNdEx + 8) > l {
+				return io.ErrUnexpectedEOF
 			}
+			m.Hashlo = uint64(binary.LittleEndian.Uint64(dAtA[iNdEx:]))
+			iNdEx += 8
 		case 8:
 			if wireType == 0 {
 				var v uint32

@@ -215,14 +215,14 @@ func (bs *BigSorter[T, PT]) storeBlock(block []T) error {
 	}
 	defer writer.Close()
 
-	bufioWriter := bufio.NewWriterSize(writer, 32*1024) // 32 KB buffer
+	bufioWriter := bufio.NewWriterSize(writer, 128*1024) // 32 KB buffer
 	lenBuf := make([]byte, 4)
 	buf := make([]byte, 0, 32*1024) // 32 KB buffer available to serialize items
 	for i := range block {
 		// Get a pointer to the item in the slice to call Serialize
 		itemPtr := PT(&block[i])
 		serialized := itemPtr.Serialize(buf)
-		binary.BigEndian.PutUint32(lenBuf, uint32(len(serialized)))
+		binary.LittleEndian.PutUint32(lenBuf, uint32(len(serialized)))
 		if _, err := bufioWriter.Write(lenBuf); err != nil {
 			return fmt.Errorf("write item length to buffer: %w", err)
 		}
@@ -251,7 +251,7 @@ func (bs *BigSorter[T, PT]) SortIter() *BigSortIterator[T, PT] {
 		buffers:       slices.Clone(bs.buffers),
 		iterChunkSize: bs.iterChunkSize,
 		expectCount:   bs.totalItems,
-		errReady:      make(chan error, 1), // Buffered to prevent blocking
+		errReady:      make(chan struct{}),
 	}
 }
 
@@ -269,7 +269,7 @@ func newBufferReader[T any, PT interface {
 	*T
 	BigSortable
 }](reader io.ReadCloser) *bufferReader[T, PT] {
-	return &bufferReader[T, PT]{reader: reader, bufReader: bufio.NewReader(reader), buffer: make([]byte, 4, 32*1024)}
+	return &bufferReader[T, PT]{reader: reader, bufReader: bufio.NewReaderSize(reader, 64*1024), buffer: make([]byte, 4, 8*1024)}
 }
 
 func (br *bufferReader[T, PT]) Read() (T, error) {
@@ -280,7 +280,7 @@ func (br *bufferReader[T, PT]) Read() (T, error) {
 	if err != nil {
 		return zero, err
 	}
-	itemLen := binary.BigEndian.Uint32(br.buffer[:4])
+	itemLen := binary.LittleEndian.Uint32(br.buffer[:4])
 
 	// Ensure buffer is large enough
 	if uint32(cap(br.buffer)) < itemLen {
@@ -316,7 +316,7 @@ type BigSortIterator[T any, PT interface {
 	iterChunkSize int
 
 	// Error handling
-	errReady chan error
+	errReady chan struct{}
 	err      atomic.Pointer[error]
 }
 

@@ -12,7 +12,15 @@ enum HashType {
   HASH_SHA256 = 2;
 }
 
-message FileMetadata {
+message SnapshotHeader {
+  // Snapshot version
+  uint32 version = 1;
+
+  // Snapshot creation timestamp in unix nanoseconds
+  uint64 timestamp = 2;
+}
+
+message SnapshotNode {
   option (vtproto.mempool) = true; // Enable memory pooling
 
   // File path, primary key
@@ -20,13 +28,13 @@ message FileMetadata {
 
   // Basic file metadata for fast-diffing
   uint64 size = 2;
-  uint64 mtime = 3;
+  uint64 mtime = 3; // last modified time in unix nanoseconds
   uint32 flags = 4;
 
   // Hash fields for authoritative change detection & integrity checking
   HashType hashtype = 5;
-  uint64 hashhi = 6;
-  uint64 hashlo = 7;
+  fixed64 hashhi = 6;
+  fixed64 hashlo = 7;
 
   // Fields for slice range tracking
   repeated uint32 slice_range_starts = 8;

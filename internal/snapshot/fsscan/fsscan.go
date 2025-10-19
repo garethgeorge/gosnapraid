@@ -43,7 +43,7 @@ func WalkDirectory(dir string) iter.Seq[FileMetadata] {
 				return fs.SkipAll
 			}
 			return nil
-		}); err != nil && !errors.Is(err, fs.SkipAll) {
+		}); err != nil {
 			yield(FileMetadata{
 				Path:  dir,
 				Error: err,

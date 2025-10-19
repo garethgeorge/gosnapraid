@@ -20,8 +20,8 @@ func (b *ByteKeySortable) Deserialize(data []byte) error {
 	if len(data) < 4 {
 		return fmt.Errorf("data too short to deserialize ByteKeySortable")
 	}
-	keyLen := int(binary.BigEndian.Uint16(data[:2]))
-	valLen := int(binary.BigEndian.Uint16(data[2:4]))
+	keyLen := int(binary.LittleEndian.Uint16(data[:2]))
+	valLen := int(binary.LittleEndian.Uint16(data[2:4]))
 
 	if len(data) < 4+keyLen+valLen {
 		return fmt.Errorf("data too short to deserialize ByteKeySortable")
@@ -40,8 +40,8 @@ func (b *ByteKeySortable) Serialize(buf []byte) []byte {
 	}
 	keyLen := len(b.Key)
 	valLen := len(b.Value)
-	binary.BigEndian.PutUint16(buf[:2], uint16(keyLen))
-	binary.BigEndian.PutUint16(buf[2:4], uint16(valLen))
+	binary.LittleEndian.PutUint16(buf[:2], uint16(keyLen))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(valLen))
 	copy(buf[4:4+keyLen], b.Key)
 	copy(buf[4+keyLen:], b.Value)
 	return buf[:4+keyLen+valLen]
@@ -64,7 +64,7 @@ func (u *Uint64KeySortable) Deserialize(data []byte) error {
 	if len(data) < 8 {
 		return fmt.Errorf("data too short to deserialize Uint64KeySortable")
 	}
-	u.Key = binary.BigEndian.Uint64(data[:8])
+	u.Key = binary.LittleEndian.Uint64(data[:8])
 	u.Value = make([]byte, len(data[8:]))
 	copy(u.Value, data[8:])
 	return nil
@@ -73,7 +73,7 @@ func (u *Uint64KeySortable) Serialize(buf []byte) []byte {
 	if len(buf) < 8+len(u.Value) {
 		buf = make([]byte, 8+len(u.Value))
 	}
-	binary.BigEndian.PutUint64(buf[:8], u.Key)
+	binary.LittleEndian.PutUint64(buf[:8], u.Key)
 	copy(buf[8:], u.Value)
 	return buf[:8+len(u.Value)]
 }
