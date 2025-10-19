@@ -9,7 +9,8 @@ import "proto/vtproto/ext.proto";
 enum HashType {
   HASH_UNKNOWN = 0;
   HASH_XXHASH64 = 1;
-  HASH_SHA256 = 2;
+  HASH_BLAKE3 = 2;
+  HASH_SHA256 = 3;
 }
 
 message SnapshotHeader {

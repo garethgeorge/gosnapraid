@@ -114,9 +114,12 @@ func (sr *SnapshotReader) readHeader() (*gosnapraidpb.SnapshotHeader, error) {
 func (sr *SnapshotReader) Iter() iter.Seq2[*gosnapraidpb.SnapshotNode, error] {
 	return func(yield func(*gosnapraidpb.SnapshotNode, error) bool) {
 		node := new(gosnapraidpb.SnapshotNode)
-
+		sliceRangeStarts := make([]uint64, 0, 128)
+		sliceRangeEnd := make([]uint64, 0, 128)
 		for {
 			node.Reset()
+			node.SliceRangeStarts = sliceRangeStarts[:0]
+			node.SliceRangeEnds = sliceRangeEnd[:0]
 
 			// Read the size prefix
 			var sizeBuf [2]byte

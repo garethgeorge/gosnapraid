@@ -8,39 +8,99 @@ import (
 	"iter"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/google/btree"
 
 	"github.com/garethgeorge/gosnapraid/internal/sliceutil"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot/fsscan"
 	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
+	sha256 "github.com/minio/sha256-simd"
+	"github.com/zeebo/blake3"
 )
 
 type SnapshotStats struct {
-	Unchanged     int
-	NewOrModified int
-	Errors        int
+	Unchanged      int
+	NewOrModified  int
+	MovedOrDeduped int
+	Errors         int
 }
 
 type Snapshotter struct {
 	fs       fs.FS
 	hashFunc gosnapraidpb.HashType
+
+	useDedupe  bool
+	dedupeTree *btree.BTreeG[hashToRange]
 }
 
 func NewSnapshotter(fs fs.FS) *Snapshotter {
 	return &Snapshotter{
-		fs:       fs,
-		hashFunc: gosnapraidpb.HashType_HASH_XXHASH64,
+		fs:        fs,
+		hashFunc:  gosnapraidpb.HashType_HASH_BLAKE3,
+		useDedupe: false,
+		dedupeTree: btree.NewG[hashToRange](64, func(a, b hashToRange) bool {
+			return a.hashhi < b.hashhi || (a.hashhi == b.hashhi && a.hashlo < b.hashlo)
+		}),
 	}
 }
 
-// TOOD: implement move detection by storing by hash
-// in particular the fileformat will simply be [hashhi, hashlo, proto size, <encoded proto>]
-//  1. load old snapshot and sort it into path major order
-//  2. generate new snapshot and add entries to a hash sorter as already encoded byte segments.
-//  3. after snapshot is generated, zip it with the old snapshot. Merge logic is a bit complicated when there are two values
-//     for the same hash (ie moved files).
-//  4. write out snapshot in hash sorted order.
+func (s *Snapshotter) UseMoveDetection(oldSnapshot *SnapshotReader) error {
+	var rangeStartBlock []uint64
+	var rangeEndBlock []uint64
+	for node, err := range oldSnapshot.Iter() {
+		if err != nil {
+			return fmt.Errorf("reading old snapshot: %w", err)
+		}
+		if len(node.SliceRangeStarts) != len(node.SliceRangeEnds) {
+			return fmt.Errorf("invalid slice ranges for file %q", node.Path)
+		}
+
+		// Only add regular files to the dedupe tree (directories don't have meaningful hashes)
+		if !fs.FileMode(node.Mode).IsRegular() {
+			continue
+		}
+
+		// Start a new block if there isn't enough capacity for this set of ranges.
+		if len(rangeStartBlock)+len(node.SliceRangeStarts) > cap(rangeStartBlock) {
+			newBlockSize := 16 * 1024
+			if len(node.SliceRangeStarts) > newBlockSize {
+				newBlockSize = len(node.SliceRangeStarts)
+			}
+			rangeStartBlock = make([]uint64, 0, newBlockSize)
+		}
+		if len(rangeEndBlock)+len(node.SliceRangeEnds) > cap(rangeEndBlock) {
+			newBlockSize := 16 * 1024
+			if len(node.SliceRangeEnds) > newBlockSize {
+				newBlockSize = len(node.SliceRangeEnds)
+			}
+			rangeEndBlock = make([]uint64, 0, newBlockSize)
+		}
+
+		sliceStart := len(rangeStartBlock)
+		rangeStartBlock = append(rangeStartBlock, node.SliceRangeStarts...)
+		sliceEnd := len(rangeStartBlock)
+		sliceStart2 := len(rangeEndBlock)
+		rangeEndBlock = append(rangeEndBlock, node.SliceRangeEnds...)
+		sliceEnd2 := len(rangeEndBlock)
+
+		// Insert into dedupe tree
+		hashEntry := hashToRange{
+			hashlo:      node.Hashlo,
+			hashhi:      node.Hashhi,
+			sliceStarts: rangeStartBlock[sliceStart:sliceEnd],
+			sliceEnds:   rangeEndBlock[sliceStart2:sliceEnd2],
+		}
+		s.dedupeTree.ReplaceOrInsert(hashEntry)
+	}
+
+	s.useDedupe = true
+
+	return nil
+}
+
 func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader) (SnapshotStats, error) {
 	dirTreeIter := fsscan.WalkFS(s.fs)
+
+	// Load the old snapshot which will be in order by hashes.
 	oldSnapshotIter := emptySnapshotIter()
 	if oldSnapshot != nil {
 		oldSnapshotIter = oldSnapshot.Iter()
@@ -63,6 +123,8 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 
 	var stats SnapshotStats
 
+	node := &gosnapraidpb.SnapshotNode{}
+
 	for diskFile, oldSnapshotItem := range leftJoin {
 		if oldSnapshotItem.Error != nil {
 			return stats, fmt.Errorf("reading old snapshot: %w", oldSnapshotItem.Error)
@@ -73,7 +135,7 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 			continue
 		}
 
-		node := gosnapraidpb.SnapshotNode{
+		*node = gosnapraidpb.SnapshotNode{
 			Path:  diskFile.Path,
 			Size:  uint64(diskFile.Size),
 			Mtime: uint64(diskFile.Mtime),
@@ -88,19 +150,36 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 			node.Hashtype = oldSnapshotItem.Value.Hashtype
 			node.Hashhi = oldSnapshotItem.Value.Hashhi
 			node.Hashlo = oldSnapshotItem.Value.Hashlo
+			node.SliceRangeEnds = oldSnapshotItem.Value.SliceRangeEnds
+			node.SliceRangeStarts = oldSnapshotItem.Value.SliceRangeStarts
 			stats.Unchanged++
 		} else {
 			// New or changed file, if it's an ordinary file try to read it and populate the hash
 			if diskFile.Mode.IsRegular() {
-				err := s.populateFileHash(diskFile.Path, &node)
+				err := s.populateFileHash(diskFile.Path, node)
 				if err != nil {
-					return stats, fmt.Errorf("hashing file %q: %w", diskFile.Path, err)
+					stats.Errors++
+					continue
+				}
+
+				// Check for deduplication (moved/duplicate files)
+				if s.useDedupe {
+					if existing, found := s.dedupeTree.Get(hashToRange{
+						hashlo: node.Hashlo,
+						hashhi: node.Hashhi,
+					}); found {
+						// Found existing file with same hash, reuse its slice ranges
+						node.SliceRangeStarts = existing.sliceStarts
+						node.SliceRangeEnds = existing.sliceEnds
+						stats.MovedOrDeduped++
+					}
 				}
 			}
+
 			stats.NewOrModified++
 		}
 
-		err := writer.Write(&node)
+		err := writer.Write(node)
 		if err != nil {
 			return stats, fmt.Errorf("write node %q: %w", diskFile.Path, err)
 		}
@@ -115,16 +194,42 @@ func (s *Snapshotter) populateFileHash(path string, node *gosnapraidpb.SnapshotN
 	}
 	defer f.Close()
 
+	// Use a large buffer for copying
+	buffer := make([]byte, 128*1024)
+
 	switch s.hashFunc {
 	case gosnapraidpb.HashType_HASH_XXHASH64:
 		hash := xxhash.New()
-		_, err = io.CopyBuffer(hash, f, make([]byte, 32*1024))
+		_, err = io.CopyBuffer(hash, f, buffer)
 		if err != nil {
 			return fmt.Errorf("reading file %q: %w", path, err)
 		}
 		node.Hashtype = gosnapraidpb.HashType_HASH_XXHASH64
 		node.Hashlo = binary.LittleEndian.Uint64(hash.Sum(nil))
 		node.Hashhi = 0 // not used for xxhash64
+		return nil
+	case gosnapraidpb.HashType_HASH_BLAKE3:
+		hasher := blake3.New()
+		buffer := make([]byte, hasher.BlockSize())
+		_, err = io.CopyBuffer(hasher, f, buffer)
+		if err != nil {
+			return fmt.Errorf("reading file %q: %w", path, err)
+		}
+		node.Hashtype = gosnapraidpb.HashType_HASH_BLAKE3
+		hash := hasher.Sum(nil)
+		node.Hashlo = binary.LittleEndian.Uint64(hash[:8])
+		node.Hashhi = binary.LittleEndian.Uint64(hash[8:])
+		return nil
+	case gosnapraidpb.HashType_HASH_SHA256:
+		hasher := sha256.New()
+		_, err = io.CopyBuffer(hasher, f, buffer)
+		if err != nil {
+			return fmt.Errorf("reading file %q: %w", path, err)
+		}
+		node.Hashtype = gosnapraidpb.HashType_HASH_SHA256
+		hash := hasher.Sum(nil)
+		node.Hashlo = binary.LittleEndian.Uint64(hash[:8])
+		node.Hashhi = binary.LittleEndian.Uint64(hash[8:16])
 		return nil
 	default:
 		return fmt.Errorf("unsupported hash type: %v", s.hashFunc)
