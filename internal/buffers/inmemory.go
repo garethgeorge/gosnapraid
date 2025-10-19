@@ -27,6 +27,7 @@ type inMemoryBuffer struct {
 }
 
 var _ io.WriteCloser = (*inMemoryBuffer)(nil)
+var _ RawBufferHandle = (*inMemoryBuffer)(nil)
 
 func (b *inMemoryBuffer) Name() string {
 	return "inmemory"
@@ -48,4 +49,8 @@ func (b *inMemoryBuffer) Write(p []byte) (n int, err error) {
 
 func (b *inMemoryBuffer) Close() error {
 	return nil
+}
+
+func (b *inMemoryBuffer) isRaw() bool {
+	return true
 }

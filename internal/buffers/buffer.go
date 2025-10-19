@@ -13,6 +13,16 @@ type BufferHandle interface {
 	Name() string
 }
 
+type CompressedBufferHandle interface {
+	BufferHandle
+	GetRaw() RawBufferHandle
+}
+
+type RawBufferHandle interface {
+	BufferHandle
+	isRaw() bool
+}
+
 // bufferFactory is a factory for creating bufferHandles and can release any resources when done.
 type BufferFactory interface {
 	New() (BufferHandle, error)

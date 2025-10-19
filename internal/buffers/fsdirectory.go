@@ -45,6 +45,9 @@ type fileBuffer struct {
 	fpath string
 }
 
+var _ BufferHandle = (*fileBuffer)(nil)
+var _ RawBufferHandle = (*fileBuffer)(nil)
+
 func (f *fileBuffer) Name() string {
 	return f.fpath
 }
@@ -63,4 +66,8 @@ func (f *fileBuffer) GetReader() (io.ReadCloser, error) {
 		return nil, err
 	}
 	return fh, nil
+}
+
+func (f *fileBuffer) isRaw() bool {
+	return true
 }

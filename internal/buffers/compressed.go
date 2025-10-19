@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 
+	"github.com/garethgeorge/gosnapraid/internal/ioutil"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -23,7 +24,7 @@ func (f *compressedBufferFactory) New() (BufferHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &compressedBufferHandle{base: baseHandle}, nil
+	return &compressedBufferHandle{base: baseHandle.(RawBufferHandle)}, nil
 }
 
 func (f *compressedBufferFactory) Release() error {
@@ -32,8 +33,10 @@ func (f *compressedBufferFactory) Release() error {
 
 // compressedBufferHandle is a bufferHandle that compresses data.
 type compressedBufferHandle struct {
-	base BufferHandle
+	base RawBufferHandle
 }
+
+var _ CompressedBufferHandle = (*compressedBufferHandle)(nil)
 
 func (h *compressedBufferHandle) Name() string {
 	return "zstd+" + h.base.Name()
@@ -48,7 +51,7 @@ func (h *compressedBufferHandle) GetReader() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	bufioReader := bufio.NewReaderSize(zstdReader, 64*1024)
+	bufioReader := bufio.NewReaderSize(zstdReader, ioutil.DefaultBufioSize)
 	return &readerCloseForwarder{
 		closers: []func() error{func() error {
 			zstdReader.Close()
@@ -63,8 +66,7 @@ func (h *compressedBufferHandle) GetWriter() (io.WriteCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	bufioWriter := bufio.NewWriterSize(baseWriter, 64*1024)
-
+	bufioWriter := bufio.NewWriterSize(baseWriter, ioutil.DefaultBufioSize)
 	zstdWriter, err := zstd.NewWriter(
 		bufioWriter,
 		zstd.WithEncoderCRC(true),
@@ -77,4 +79,8 @@ func (h *compressedBufferHandle) GetWriter() (io.WriteCloser, error) {
 		closers:     []func() error{zstdWriter.Close, bufioWriter.Flush, baseWriter.Close},
 		WriteCloser: zstdWriter,
 	}, nil
+}
+
+func (h *compressedBufferHandle) GetRaw() RawBufferHandle {
+	return h.base
 }
