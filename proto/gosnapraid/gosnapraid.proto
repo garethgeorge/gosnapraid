@@ -29,7 +29,7 @@ message SnapshotNode {
   // Basic file metadata for fast-diffing
   uint64 size = 2;
   uint64 mtime = 3; // last modified time in unix nanoseconds
-  uint32 flags = 4;
+  uint32 mode = 4;
 
   // Hash fields for authoritative change detection & integrity checking
   HashType hashtype = 5;

@@ -9,13 +9,14 @@ import (
 
 var ErrCancelled = errors.New("scan cancelled")
 
-func WalkDirectory(dir string) iter.Seq[FileMetadata] {
+// WalkFS walks the filesystem starting from the root directory.
+// This is useful for testing with custom filesystems or for fuzzing.
+func WalkFS(fsys fs.FS) iter.Seq[FileMetadata] {
 	return func(yield func(FileMetadata) bool) {
-		if err := fs.WalkDir(os.DirFS(dir), ".", func(path string, d fs.DirEntry, err error) error {
-			itemPath := dir + string(os.PathSeparator) + path
+		if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if !yield(FileMetadata{
-					Path:  itemPath,
+					Path:  path,
 					Error: err,
 				}) {
 					return fs.SkipAll
@@ -25,7 +26,7 @@ func WalkDirectory(dir string) iter.Seq[FileMetadata] {
 			info, err := d.Info()
 			if err != nil {
 				if !yield(FileMetadata{
-					Path:  itemPath,
+					Path:  path,
 					Error: err,
 				}) {
 					return fs.SkipAll
@@ -34,7 +35,7 @@ func WalkDirectory(dir string) iter.Seq[FileMetadata] {
 			}
 
 			if !yield(FileMetadata{
-				Path:  itemPath,
+				Path:  path,
 				Mtime: info.ModTime().UnixNano(),
 				Size:  info.Size(),
 				Mode:  info.Mode(),
@@ -45,9 +46,15 @@ func WalkDirectory(dir string) iter.Seq[FileMetadata] {
 			return nil
 		}); err != nil {
 			yield(FileMetadata{
-				Path:  dir,
+				Path:  "",
 				Error: err,
 			})
 		}
 	}
+}
+
+// WalkDirectory walks a directory on the OS filesystem.
+// For testing with custom filesystems, use WalkFS instead.
+func WalkDirectory(dir string) iter.Seq[FileMetadata] {
+	return WalkFS(os.DirFS(dir))
 }

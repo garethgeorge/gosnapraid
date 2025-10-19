@@ -7,10 +7,9 @@ package gosnapraidpb
 import (
 	binary "encoding/binary"
 	fmt "fmt"
-	io "io"
-
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	io "io"
 )
 
 const (
@@ -150,8 +149,8 @@ func (m *SnapshotNode) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x28
 	}
-	if m.Flags != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Flags))
+	if m.Mode != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Mode))
 		i--
 		dAtA[i] = 0x20
 	}
@@ -207,8 +206,8 @@ func (m *SnapshotNode) SizeVT() (n int) {
 	if m.Mtime != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Mtime))
 	}
-	if m.Flags != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.Flags))
+	if m.Mode != 0 {
+		n += 1 + protohelpers.SizeOfVarint(uint64(m.Mode))
 	}
 	if m.Hashtype != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.Hashtype))
@@ -427,9 +426,9 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 			}
 		case 4:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Flags", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Mode", wireType)
 			}
-			m.Flags = 0
+			m.Mode = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -439,7 +438,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Flags |= uint32(b&0x7F) << shift
+				m.Mode |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

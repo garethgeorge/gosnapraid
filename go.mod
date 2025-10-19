@@ -3,6 +3,7 @@ module github.com/garethgeorge/gosnapraid
 go 1.25.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/google/btree v1.1.3
 	github.com/klauspost/compress v1.18.0
 	github.com/planetscale/vtprotobuf v0.6.0

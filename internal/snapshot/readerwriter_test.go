@@ -58,8 +58,8 @@ func TestSnapshotReadWrite(t *testing.T) {
 }
 
 func FuzzSnapshotNodeRoundtrip(f *testing.F) {
-	f.Add("file.txt", uint64(1024), uint64(time.Now().UnixNano()), uint32(0))
-	f.Fuzz(func(t *testing.T, path string, size uint64, mtime uint64, flags uint32) {
+	f.Add("file.txt", uint64(1024), uint64(time.Now().UnixNano()))
+	f.Fuzz(func(t *testing.T, path string, size uint64, mtime uint64) {
 		var buf bytes.Buffer
 
 		header := &gosnapraidpb.SnapshotHeader{
@@ -74,7 +74,6 @@ func FuzzSnapshotNodeRoundtrip(f *testing.F) {
 			Path:  path,
 			Size:  size,
 			Mtime: mtime,
-			Flags: flags,
 		}
 
 		err = writer.Write(node)
@@ -93,7 +92,7 @@ func FuzzSnapshotNodeRoundtrip(f *testing.F) {
 			assert.Equal(t, node.Path, readNode.Path)
 			assert.Equal(t, node.Size, readNode.Size)
 			assert.Equal(t, node.Mtime, readNode.Mtime)
-			assert.Equal(t, node.Flags, readNode.Flags)
+			assert.Equal(t, node.Mode, readNode.Mode)
 		}
 	})
 }

@@ -108,7 +108,6 @@ func (sr *SnapshotReader) readHeader() (*gosnapraidpb.SnapshotHeader, error) {
 	return &header, nil
 }
 
-
 // Iter returns an iterator that yields references to SnapshotNodes.
 // Nodes are allocated in batches of 1024 for better performance.
 // The yielded nodes are only valid until the next iteration.

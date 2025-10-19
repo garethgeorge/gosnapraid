@@ -46,13 +46,10 @@ func TestWalkDirectory_BasicStructure(t *testing.T) {
 		}
 	}
 
-	// Check that all paths are absolute and start with tmpDir
+	// Check that all paths are relative (not absolute)
 	for _, r := range results {
-		if !filepath.IsAbs(r.Path) {
-			t.Errorf("expected absolute path, got %s", r.Path)
-		}
-		if !strings.HasPrefix(r.Path, tmpDir) {
-			t.Errorf("expected path to start with %s, got %s", tmpDir, r.Path)
+		if filepath.IsAbs(r.Path) {
+			t.Errorf("expected relative path, got absolute: %s", r.Path)
 		}
 	}
 
@@ -65,8 +62,7 @@ func TestWalkDirectory_BasicStructure(t *testing.T) {
 
 	// Check that files have non-zero size and mtime
 	for _, r := range results {
-		baseName := filepath.Base(r.Path)
-		if strings.HasSuffix(baseName, ".txt") {
+		if strings.HasSuffix(r.Path, ".txt") {
 			if r.Size == 0 {
 				t.Errorf("file %s has zero size", r.Path)
 			}
@@ -81,8 +77,7 @@ func TestWalkDirectory_BasicStructure(t *testing.T) {
 
 	// Check that directories have Mode.IsDir() true
 	for _, r := range results {
-		baseName := filepath.Base(r.Path)
-		if baseName == "subdir" || baseName == filepath.Base(tmpDir) {
+		if r.Path == "." || r.Path == "subdir" {
 			if !r.Mode.IsDir() {
 				t.Errorf("directory %s does not have IsDir mode, mode: %v", r.Path, r.Mode)
 			}
@@ -216,21 +211,28 @@ func TestWalkDirectory_PathFormat(t *testing.T) {
 		paths = append(paths, metadata.Path)
 	}
 
-	// All paths should be absolute
+	// All paths should be relative (not absolute)
 	for _, path := range paths {
-		if !filepath.IsAbs(path) {
-			t.Errorf("path should be absolute: %s", path)
+		if filepath.IsAbs(path) {
+			t.Errorf("path should be relative, got absolute: %s", path)
 		}
 	}
 
-	// Paths should use the OS separator
+	// The root directory should be "."
+	if len(paths) > 0 && paths[0] != "." {
+		t.Errorf("expected root path to be '.', got %q", paths[0])
+	}
+
+	// Check that test.txt is found with relative path
+	found := false
 	for _, path := range paths {
-		if strings.Contains(path, "\\") && os.PathSeparator != '\\' {
-			t.Errorf("path uses wrong separator: %s", path)
+		if path == "test.txt" {
+			found = true
+			break
 		}
-		if strings.Contains(path, "/") && os.PathSeparator != '/' {
-			// This is actually OK on Windows since / works there too
-		}
+	}
+	if !found {
+		t.Error("test.txt not found in paths")
 	}
 }
 
