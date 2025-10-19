@@ -1,10 +1,12 @@
-package snaparray
+package progress
 
 type SpinnerProgressTracker interface {
 	SetMessage(msg string)
-	AddDone(n int)
-	AddError(err error)
+	SetDone(n int)
+	SetError(err error)
+	MarkFinished()
 }
+
 type NoopSpinnerProgressTracker struct{}
 
 func (n NoopSpinnerProgressTracker) SetMessage(msg string) {}
@@ -12,9 +14,11 @@ func (n NoopSpinnerProgressTracker) AddDone(n2 int)        {}
 func (n NoopSpinnerProgressTracker) AddError(err error)    {}
 
 type BarProgressTracker interface {
+	SetMessage(msg string)
 	SetTotal(total int64)
-	AddDone(n int)
-	AddError(err error)
+	SetDone(n int)
+	SetError(err error)
+	MarkFinished()
 }
 
 type NoopBarProgressTracker struct{}

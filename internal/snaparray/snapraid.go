@@ -1,5 +1,9 @@
 package snaparray
 
+const (
+	Version = 1
+)
+
 type Array struct {
 	Data         []*Disk
 	ParityFiles  []string

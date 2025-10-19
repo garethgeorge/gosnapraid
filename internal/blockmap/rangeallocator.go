@@ -104,6 +104,7 @@ func (r *RangeAllocator[T]) markAllocated(start, end int64) {
 	}
 }
 
+// Allocate finds and allocates a range of the given size, or returns a smaller range if not enough space is available.
 func (r *RangeAllocator[T]) Allocate(size int64, data T) (start int64, end int64) {
 	start, end = r.findFreeRangeInternal(size)
 	if end < start {
