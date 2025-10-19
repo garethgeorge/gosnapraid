@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/garethgeorge/gosnapraid/internal/bigsort/buffers"
+	"github.com/garethgeorge/gosnapraid/internal/poolutil"
 )
 
 type options struct {
@@ -341,7 +342,11 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 		defer cancel()
 
 		// Buffer for reusable item chunks to reduce allocations
-		itemChunkReuseChan := make(chan []T, len(bsi.buffers)*2)
+		itemChunkPool := poolutil.NewPool[[]T](func() []T {
+			return make([]T, 0, bsi.iterChunkSize)
+		}, func(val []T) []T {
+			return val[:0]
+		}, bsi.iterChunkSize*len(bsi.buffers)) // Enough for one chunk per buffer
 
 		var wg sync.WaitGroup
 		itemChans := make([]chan []T, len(bsi.buffers))
@@ -362,13 +367,7 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 
 				itemReader := newBufferReader[T, PT](reader)
 				for {
-					var itemChunk []T
-					select {
-					case itemChunk = <-itemChunkReuseChan:
-						itemChunk = itemChunk[:0]
-					default:
-						itemChunk = make([]T, 0, bsi.iterChunkSize)
-					}
+					itemChunk := itemChunkPool.Get()
 
 					for len(itemChunk) < cap(itemChunk) {
 						item, err := itemReader.Read()
@@ -406,7 +405,7 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 				batch:      chunk,
 				idx:        0,
 				sourceChan: itemChan,
-				reuseChan:  itemChunkReuseChan,
+				pool:       itemChunkPool,
 			})
 		}
 		heap.Init(&valueHeap)
@@ -431,8 +430,6 @@ func (bsi *BigSortIterator[T, PT]) Iter() iter.Seq[T] {
 	}
 }
 
-// --- Heap Implementation ---
-
 type valueAndSource[T any, PT interface {
 	*T
 	BigSortable
@@ -440,7 +437,7 @@ type valueAndSource[T any, PT interface {
 	batch      []T
 	idx        int
 	sourceChan chan []T
-	reuseChan  chan []T
+	pool       *poolutil.Pool[[]T]
 }
 
 func (v *valueAndSource[T, PT]) Current() T {
@@ -452,12 +449,7 @@ func (v *valueAndSource[T, PT]) Advance() bool {
 	if v.idx < len(v.batch) {
 		return true
 	}
-
-	select {
-	case v.reuseChan <- v.batch:
-	default: // Don't block if channel is full
-	}
-
+	v.pool.Put(v.batch)
 	newBatch, ok := <-v.sourceChan
 	if !ok || len(newBatch) == 0 {
 		return false

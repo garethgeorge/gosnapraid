@@ -47,6 +47,7 @@ func FuzzBigSorterConfigs(f *testing.F) {
 		}
 
 		sorter := NewBigSorter[ByteKeySortable](factory, opts...)
+		defer sorter.Close()
 
 		// Generate 1MB of data with random key sizes.
 		const totalDataSize = 1 * 1024 * 1024

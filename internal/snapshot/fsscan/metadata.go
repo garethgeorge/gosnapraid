@@ -1,10 +1,11 @@
 package fsscan
 
+import "os"
+
 type FileMetadata struct {
 	Path  string
 	Size  int64
 	Mtime int64
-	Flags uint32
-
+	Mode  os.FileMode
 	Error error
 }
