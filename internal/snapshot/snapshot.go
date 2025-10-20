@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	Version = 1
+	Version   = 1
+	BlockSize = 64 * 1024 // 64 KiB blocks
 )
 
 type SnapshotStats struct {
@@ -354,6 +355,68 @@ func (s *Snapshotter) populateFileHash(path string, node *gosnapraidpb.SnapshotN
 		return fmt.Errorf("unsupported hash type: %v", s.hashFunc)
 	}
 }
+
+// func (s *Snapshotter) allocateMissingRanges(outSnapBuf buffers.BufferHandle, inSnapBuf buffers.BufferHandle, allocator *stripealloc.StripeAllocator) error {
+// 	// Create a snapshot reader and writer
+// 	bytesReader, err := inSnapBuf.GetReader()
+// 	if err != nil {
+// 		return fmt.Errorf("getting snapshot reader: %w", err)
+// 	}
+// 	defer bytesReader.Close()
+// 	reader, header, err := NewSnapshotReader(bytesReader)
+// 	if err != nil {
+// 		return fmt.Errorf("creating snapshot reader: %w", err)
+// 	}
+// 	if header.Version != Version {
+// 		return fmt.Errorf("snapshot version %d does not match expected version %d", header.Version, Version)
+// 	}
+
+// 	bytesWriter, err := outSnapBuf.GetWriter()
+// 	if err != nil {
+// 		return fmt.Errorf("getting temp snapshot writer: %w", err)
+// 	}
+// 	defer bytesWriter.Close()
+// 	writer, err := NewSnapshotWriter(bytesWriter, &gosnapraidpb.SnapshotHeader{
+// 		Version:   Version,
+// 		Timestamp: uint64(time.Now().UnixNano()),
+// 	})
+// 	if err != nil {
+// 		return fmt.Errorf("creating temp snapshot writer: %w", err)
+// 	}
+
+// 	for node, err := range reader.Iter() {
+// 		if err != nil {
+// 			return fmt.Errorf("reading snapshot: %w", err)
+// 		}
+
+// 		if !fs.FileMode(node.Mode).IsRegular() {
+// 			continue
+// 		}
+
+// 		// Determine how many stripes are needed
+// 		numStripes := (node.Size + BlockSize - 1) / BlockSize
+
+// 		// Todo: if there are existing ranges, verify that they cover the expected size as a sanity check
+// 		// Todo: if ranges need to be allocated, allocate them using the range allocator.
+
+// 		if len(node.StripeRangeStarts) == 0 || len(node.StripeRangeEnds) == 0 { {
+// 			// Allocate new ranges
+// 			rangeList, err := allocator.Allocate(numStripes)
+// 			if err != nil {
+// 				return fmt.Errorf("allocating ranges for file %q: %w", node.Path, err)
+// 			}
+// 			// Convert to slices
+// 			node.StripeRangeStarts = make([]uint64, len(rangeList))
+// 			node.StripeRangeEnds = make([]uint64, len(rangeList))
+// 			for i, r := range rangeList {
+// 				node.StripeRangeStarts[i] = uint64(r.Start)
+// 				node.StripeRangeEnds[i] = uint64(r.End)
+// 			}
+// 		}
+
+// 	}
+
+// }
 
 func emptySnapshotIter() iter.Seq2[*gosnapraidpb.SnapshotNode, error] {
 	return func(yield func(*gosnapraidpb.SnapshotNode, error) bool) {

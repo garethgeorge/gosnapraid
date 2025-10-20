@@ -244,3 +244,56 @@ func TestUpdateHashesLoadingAllocations(t *testing.T) {
 	}
 	t.Logf("Allocated ranges: %v", allocatedRanges)
 }
+
+func BenchmarkCreateSnapshot(b *testing.B) {
+	treeConfig := testutil.DefaultTreeConfig()
+	// A larger tree for a more realistic benchmark
+	treeConfig.Depth = 3
+	treeConfig.BreadthPerDir = 5
+	treeConfig.FilesPerDir = 10
+	memFS := testutil.GenerateMapFS(treeConfig)
+
+	b.Logf("BenchmarkCreateSnapshot: FS with %d files/directories", testutil.CountExpectedEntries(treeConfig))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		snapshotBuf := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+		snapshotter := NewSnapshotter(memFS, snapshotBuf, nil)
+		// The argument to Update is a temp buffer for hashes
+		_, err := snapshotter.Update(buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil)))
+		if err != nil {
+			b.Fatalf("CreateSnapshot failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkUpdateSnapshot(b *testing.B) {
+	treeConfig := testutil.DefaultTreeConfig()
+	// A larger tree for a more realistic benchmark
+	treeConfig.Depth = 3
+	treeConfig.BreadthPerDir = 5
+	treeConfig.FilesPerDir = 10
+	memFS := testutil.GenerateMapFS(treeConfig)
+
+	priorSnapshotBuf := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	priorSnapshotter := NewSnapshotter(memFS, priorSnapshotBuf, nil)
+	_, err := priorSnapshotter.Update(buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil)))
+	if err != nil {
+		b.Fatalf("Create prior snapshot failed: %v", err)
+	}
+
+	b.Logf("BenchmarkUpdateSnapshot: FS with %d files/directories", testutil.CountExpectedEntries(treeConfig))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		snapshotBuf := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+		snapshotter := NewSnapshotter(memFS, snapshotBuf, priorSnapshotBuf)
+		// The argument to Update is a temp buffer for hashes
+		_, err := snapshotter.Update(buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil)))
+		if err != nil {
+			b.Fatalf("CreateSnapshot failed: %v", err)
+		}
+	}
+}
