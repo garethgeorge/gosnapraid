@@ -6,52 +6,121 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/google/btree"
 
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 	"github.com/garethgeorge/gosnapraid/internal/sliceutil"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot/fsscan"
+	"github.com/garethgeorge/gosnapraid/internal/stripealloc"
 	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
 	sha256 "github.com/minio/sha256-simd"
 	"github.com/zeebo/blake3"
 )
 
+const (
+	Version = 1
+)
+
 type SnapshotStats struct {
-	Unchanged      int
-	NewOrModified  int
-	MovedOrDeduped int
+	Unchanged      int // unchanged files
+	NewOrModified  int // new or modified files
+	Missing        int // missing files from previous snapshot, may have been deleted or moved
+	MovedOrDeduped int // includes moved and duplicated files detected by hash
 	Errors         int
 }
 
 type Snapshotter struct {
-	fs       fs.FS
-	hashFunc gosnapraidpb.HashType
+	fs             fs.FS
+	snapshotBuf    buffers.BufferHandle
+	oldSnapshotBuf buffers.BufferHandle
 
-	useDedupe  bool
-	dedupeTree *btree.BTreeG[hashToRange]
+	hashFunc gosnapraidpb.HashType
 }
 
-func NewSnapshotter(fs fs.FS) *Snapshotter {
+func NewSnapshotter(fs fs.FS, snapshotBuf buffers.BufferHandle, oldSnapshotBuf buffers.BufferHandle) *Snapshotter {
 	return &Snapshotter{
-		fs:        fs,
-		hashFunc:  gosnapraidpb.HashType_HASH_BLAKE3,
-		useDedupe: false,
-		dedupeTree: btree.NewG[hashToRange](64, func(a, b hashToRange) bool {
-			return a.hashhi < b.hashhi || (a.hashhi == b.hashhi && a.hashlo < b.hashlo)
-		}),
+		fs:             fs,
+		snapshotBuf:    snapshotBuf,
+		oldSnapshotBuf: oldSnapshotBuf,
+
+		hashFunc: gosnapraidpb.HashType_HASH_BLAKE3,
 	}
 }
 
-func (s *Snapshotter) UseMoveDetection(oldSnapshot *SnapshotReader) error {
+// Update creates a new snapshot by comparing the current state of the filesystem
+// against the old snapshot. It populates file hashes for new or modified files,
+// and reuses hashes and stripe ranges for unchanged files. If move detection
+// is enabled, it also detects moved or duplicate files based on their hashes.
+func (s *Snapshotter) Update(tempBuf buffers.BufferHandle) (SnapshotStats, error) {
+	if tempBuf == nil {
+		tempBuf = buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	}
+	dedupeTree, err := s.buildDedupeTree()
+	if err != nil {
+		return SnapshotStats{}, fmt.Errorf("building dedupe/move detection tree: %w", err)
+	}
+
+	alloc := stripealloc.NewStripeAllocator(1 << 63)
+
+	stats, err := s.updateHashesAndMarkAllocations(tempBuf, alloc, dedupeTree, s.oldSnapshotBuf)
+
+	// FOR NOW: copy tempBuf to s.snapshotBuf
+	if err == nil {
+		writer, err := s.snapshotBuf.GetWriter()
+		if err != nil {
+			return stats, fmt.Errorf("getting snapshot writer: %w", err)
+		}
+		defer writer.Close()
+		reader, err := tempBuf.GetReader()
+		if err != nil {
+			return stats, fmt.Errorf("getting temp buffer reader: %w", err)
+		}
+		defer reader.Close()
+		_, err = io.Copy(writer, reader)
+		if err != nil {
+			return stats, fmt.Errorf("copying temp buffer to snapshot buffer: %w", err)
+		}
+	}
+
+	return stats, err
+}
+
+func (s *Snapshotter) buildDedupeTree() (*btree.BTreeG[hashToRange], error) {
+	dedupeTree := btree.NewG[hashToRange](32, func(a, b hashToRange) bool {
+		return a.hashhi < b.hashhi || (a.hashhi == b.hashhi && a.hashlo < b.hashlo)
+	})
+
+	if s.oldSnapshotBuf == nil {
+		return dedupeTree, nil
+	}
+
 	var rangeStartBlock []uint64
 	var rangeEndBlock []uint64
-	for node, err := range oldSnapshot.Iter() {
+
+	// Open the old snapshot for reading
+	bytesReader, err := s.oldSnapshotBuf.GetReader()
+	if err != nil {
+		return nil, fmt.Errorf("getting old snapshot reader: %w", err)
+	}
+	defer bytesReader.Close()
+	reader, header, err := NewSnapshotReader(bytesReader)
+	if err != nil {
+		return nil, fmt.Errorf("creating old snapshot reader: %w", err)
+	}
+	if header.Version != Version {
+		return nil, fmt.Errorf("old snapshot version %d does not match expected version %d", header.Version, Version)
+	}
+
+	// Iterate through the old snapshot and build the dedupe tree
+	for node, err := range reader.Iter() {
 		if err != nil {
-			return fmt.Errorf("reading old snapshot: %w", err)
+			return nil, fmt.Errorf("reading old snapshot: %w", err)
 		}
 		if len(node.StripeRangeStarts) != len(node.StripeRangeEnds) {
-			return fmt.Errorf("invalid stripe ranges for file %q", node.Path)
+			return nil, fmt.Errorf("invalid stripe ranges for file %q", node.Path)
 		}
 
 		// Only add regular files to the dedupe tree (directories don't have meaningful hashes)
@@ -88,24 +157,61 @@ func (s *Snapshotter) UseMoveDetection(oldSnapshot *SnapshotReader) error {
 			sliceStarts: rangeStartBlock[sliceStart:sliceEnd],
 			sliceEnds:   rangeEndBlock[sliceStart2:sliceEnd2],
 		}
-		s.dedupeTree.ReplaceOrInsert(hashEntry)
+		dedupeTree.ReplaceOrInsert(hashEntry)
 	}
 
-	s.useDedupe = true
-
-	return nil
+	return dedupeTree, nil
 }
 
-func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader) (SnapshotStats, error) {
+// updateHashesAndMarkAllocations updates file hashes for new or modified files
+// and loads allocated stripe ranges for unchanged files from the old snapshot.
+//
+// Provide an empty allocator and a dedupeTree (which may be empty in the case of no prior snapshot).
+// The allocator will be populated with new allocations for new or modified files.
+//
+// The old snapshot is read from oldSnapshotBuf (optional), and the new snapshot is written to newSnapshotBuf.
+// It is expected that the sort orders must match to allow effective left-join processing.
+func (s *Snapshotter) updateHashesAndMarkAllocations(
+	newSnapshotBuf buffers.BufferHandle,
+	allocator *stripealloc.StripeAllocator,
+	dedupeTree *btree.BTreeG[hashToRange],
+	oldSnapshotBuf buffers.BufferHandle,
+) (SnapshotStats, error) {
 	dirTreeIter := fsscan.WalkFS(s.fs)
 
 	// Load the old snapshot which will be in order by hashes.
 	oldSnapshotIter := emptySnapshotIter()
-	if oldSnapshot != nil {
-		oldSnapshotIter = oldSnapshot.Iter()
+	if oldSnapshotBuf != nil {
+		bytesReader, err := s.oldSnapshotBuf.GetReader()
+		if err != nil {
+			return SnapshotStats{}, fmt.Errorf("getting old snapshot reader: %w", err)
+		}
+		defer bytesReader.Close()
+		reader, header, err := NewSnapshotReader(bytesReader)
+		if err != nil {
+			return SnapshotStats{}, fmt.Errorf("creating old snapshot reader: %w", err)
+		}
+		if header.Version != Version {
+			return SnapshotStats{}, fmt.Errorf("old snapshot version %d does not match expected version %d", header.Version, Version)
+		}
+		oldSnapshotIter = reader.Iter()
 	}
 
-	leftJoin := sliceutil.LeftJoinIters(dirTreeIter, transformErrIter(oldSnapshotIter), func(a fsscan.FileMetadata, b struct {
+	// Create the new snapshot writer
+	bytesWriter, err := newSnapshotBuf.GetWriter()
+	if err != nil {
+		return SnapshotStats{}, fmt.Errorf("getting new snapshot writer: %w", err)
+	}
+	defer bytesWriter.Close()
+	writer, err := NewSnapshotWriter(bytesWriter, &gosnapraidpb.SnapshotHeader{
+		Version:   Version,
+		Timestamp: uint64(time.Now().UnixNano()),
+	})
+	if err != nil {
+		return SnapshotStats{}, fmt.Errorf("creating new snapshot writer: %w", err)
+	}
+
+	fullOuterJoin := sliceutil.FullOuterJoinIters(dirTreeIter, transformErrIter(oldSnapshotIter), func(a fsscan.FileMetadata, b struct {
 		Value *gosnapraidpb.SnapshotNode
 		Error error
 	}) int {
@@ -121,16 +227,20 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 	})
 
 	var stats SnapshotStats
-
 	node := &gosnapraidpb.SnapshotNode{}
 
-	for diskFile, oldSnapshotItem := range leftJoin {
+	var rangeList []stripealloc.Range
+
+	for diskFile, oldSnapshotItem := range fullOuterJoin {
 		if oldSnapshotItem.Error != nil {
 			return stats, fmt.Errorf("reading old snapshot: %w", oldSnapshotItem.Error)
 		}
-
 		if diskFile.Error != nil {
 			stats.Errors++
+			continue
+		}
+		if diskFile == (fsscan.FileMetadata{}) {
+			stats.Missing++
 			continue
 		}
 
@@ -162,27 +272,37 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 				}
 
 				// Check for deduplication (moved/duplicate files)
-				if s.useDedupe {
-					if existing, found := s.dedupeTree.Get(hashToRange{
-						hashlo: node.Hashlo,
-						hashhi: node.Hashhi,
-					}); found {
-						// Found existing file with same hash, reuse its stripe ranges
-						node.StripeRangeStarts = existing.sliceStarts
-						node.StripeRangeEnds = existing.sliceEnds
-						stats.MovedOrDeduped++
-					}
+				if existing, found := dedupeTree.Get(hashToRange{
+					hashlo: node.Hashlo,
+					hashhi: node.Hashhi,
+				}); found {
+					// Found existing file with same hash, reuse its stripe ranges
+					node.StripeRangeStarts = existing.sliceStarts
+					node.StripeRangeEnds = existing.sliceEnds
+					stats.MovedOrDeduped++
+				} else {
+					stats.NewOrModified++
 				}
+			} else {
+				stats.NewOrModified++
 			}
-
-			stats.NewOrModified++
 		}
 
-		err := writer.Write(node)
+		// Mark the range as allocated in the allocator
+		rangeList, err := stripealloc.RangeListFromSlices(node.StripeRangeStarts, node.StripeRangeEnds, rangeList[:0])
 		if err != nil {
+			return stats, fmt.Errorf("creating range list for file %q: %w", diskFile.Path, err)
+		}
+		if err := allocator.MarkAllocated(rangeList...); err != nil {
+			return stats, fmt.Errorf("marking range allocated for file %q: %w", diskFile.Path, err)
+		}
+
+		// Write the node to the new snapshot
+		if err := writer.Write(node); err != nil {
 			return stats, fmt.Errorf("write node %q: %w", diskFile.Path, err)
 		}
 	}
+
 	return stats, nil
 }
 
