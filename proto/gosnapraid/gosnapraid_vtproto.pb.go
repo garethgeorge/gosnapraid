@@ -92,14 +92,14 @@ func (m *SnapshotNode) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if len(m.SliceRangeEnds) > 0 {
+	if len(m.StripeRangeEnds) > 0 {
 		var pksize2 int
-		for _, num := range m.SliceRangeEnds {
+		for _, num := range m.StripeRangeEnds {
 			pksize2 += protohelpers.SizeOfVarint(uint64(num))
 		}
 		i -= pksize2
 		j1 := i
-		for _, num := range m.SliceRangeEnds {
+		for _, num := range m.StripeRangeEnds {
 			for num >= 1<<7 {
 				dAtA[j1] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
@@ -112,14 +112,14 @@ func (m *SnapshotNode) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x4a
 	}
-	if len(m.SliceRangeStarts) > 0 {
+	if len(m.StripeRangeStarts) > 0 {
 		var pksize4 int
-		for _, num := range m.SliceRangeStarts {
+		for _, num := range m.StripeRangeStarts {
 			pksize4 += protohelpers.SizeOfVarint(uint64(num))
 		}
 		i -= pksize4
 		j3 := i
-		for _, num := range m.SliceRangeStarts {
+		for _, num := range m.StripeRangeStarts {
 			for num >= 1<<7 {
 				dAtA[j3] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
@@ -218,16 +218,16 @@ func (m *SnapshotNode) SizeVT() (n int) {
 	if m.Hashlo != 0 {
 		n += 9
 	}
-	if len(m.SliceRangeStarts) > 0 {
+	if len(m.StripeRangeStarts) > 0 {
 		l = 0
-		for _, e := range m.SliceRangeStarts {
+		for _, e := range m.StripeRangeStarts {
 			l += protohelpers.SizeOfVarint(uint64(e))
 		}
 		n += 1 + protohelpers.SizeOfVarint(uint64(l)) + l
 	}
-	if len(m.SliceRangeEnds) > 0 {
+	if len(m.StripeRangeEnds) > 0 {
 		l = 0
-		for _, e := range m.SliceRangeEnds {
+		for _, e := range m.StripeRangeEnds {
 			l += protohelpers.SizeOfVarint(uint64(e))
 		}
 		n += 1 + protohelpers.SizeOfVarint(uint64(l)) + l
@@ -499,7 +499,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 						break
 					}
 				}
-				m.SliceRangeStarts = append(m.SliceRangeStarts, v)
+				m.StripeRangeStarts = append(m.StripeRangeStarts, v)
 			} else if wireType == 2 {
 				var packedLen int
 				for shift := uint(0); ; shift += 7 {
@@ -534,8 +534,8 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 					}
 				}
 				elementCount = count
-				if elementCount != 0 && len(m.SliceRangeStarts) == 0 && cap(m.SliceRangeStarts) < elementCount {
-					m.SliceRangeStarts = make([]uint64, 0, elementCount)
+				if elementCount != 0 && len(m.StripeRangeStarts) == 0 && cap(m.StripeRangeStarts) < elementCount {
+					m.StripeRangeStarts = make([]uint64, 0, elementCount)
 				}
 				for iNdEx < postIndex {
 					var v uint64
@@ -553,10 +553,10 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 							break
 						}
 					}
-					m.SliceRangeStarts = append(m.SliceRangeStarts, v)
+					m.StripeRangeStarts = append(m.StripeRangeStarts, v)
 				}
 			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field SliceRangeStarts", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field StripeRangeStarts", wireType)
 			}
 		case 9:
 			if wireType == 0 {
@@ -575,7 +575,7 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 						break
 					}
 				}
-				m.SliceRangeEnds = append(m.SliceRangeEnds, v)
+				m.StripeRangeEnds = append(m.StripeRangeEnds, v)
 			} else if wireType == 2 {
 				var packedLen int
 				for shift := uint(0); ; shift += 7 {
@@ -610,8 +610,8 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 					}
 				}
 				elementCount = count
-				if elementCount != 0 && len(m.SliceRangeEnds) == 0 && cap(m.SliceRangeEnds) < elementCount {
-					m.SliceRangeEnds = make([]uint64, 0, elementCount)
+				if elementCount != 0 && len(m.StripeRangeEnds) == 0 && cap(m.StripeRangeEnds) < elementCount {
+					m.StripeRangeEnds = make([]uint64, 0, elementCount)
 				}
 				for iNdEx < postIndex {
 					var v uint64
@@ -629,10 +629,10 @@ func (m *SnapshotNode) UnmarshalVT(dAtA []byte) error {
 							break
 						}
 					}
-					m.SliceRangeEnds = append(m.SliceRangeEnds, v)
+					m.StripeRangeEnds = append(m.StripeRangeEnds, v)
 				}
 			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field SliceRangeEnds", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field StripeRangeEnds", wireType)
 			}
 		default:
 			iNdEx = preIndex

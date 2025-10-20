@@ -118,8 +118,8 @@ func (sr *SnapshotReader) Iter() iter.Seq2[*gosnapraidpb.SnapshotNode, error] {
 		sliceRangeEnd := make([]uint64, 0, 128)
 		for {
 			node.Reset()
-			node.SliceRangeStarts = sliceRangeStarts[:0]
-			node.SliceRangeEnds = sliceRangeEnd[:0]
+			node.StripeRangeStarts = sliceRangeStarts[:0]
+			node.StripeRangeEnds = sliceRangeEnd[:0]
 
 			// Read the size prefix
 			var sizeBuf [2]byte

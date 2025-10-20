@@ -35,42 +35,40 @@ func (d *Disk) snapshotPath(prefix string) string {
 // where a content manifest could be stored.
 // Returns the path of one of the matching snapshots if any exist.
 // Returns nil if all snapshots match, or an error if there is a mismatch.
-func (d *Disk) verifySnapshots(dirs []string, prog progress.BarProgressTracker) (string, error) {
+func (d *Disk) verifySnapshots(buffers []buffers.CompressedBufferHandle, prog progress.BarProgressTracker) (string, error) {
 	var checksumsMu sync.Mutex
 	checksums := make(map[string]uint64)
 
 	var eg errgroup.Group
 	total := 0
-	for _, dir := range dirs {
-		path := d.snapshotPath(dir)
-		f, err := os.Open(path)
+	for _, buffer := range buffers {
+		reader, err := buffer.GetRaw().GetReader() // Get the raw reader to avoid double compression
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return "", fmt.Errorf("open snapshot file %s: %w", path, err)
+			return "", fmt.Errorf("get snapshot reader %q: %w", buffer.Name(), err)
 		}
-		defer f.Close()
+		defer reader.Close()
+
+		f := reader
 		total++
 
 		eg.Go(func() error {
 			// Compute a xxhash64 checksum of the snapshot
 			hasher := xxhash.New()
 			if _, err := io.Copy(hasher, f); err != nil {
-				return fmt.Errorf("hash snapshot file %s: %w", path, err)
+				return fmt.Errorf("hash snapshot file %s: %w", buffer.Name(), err)
 			}
 			sum := hasher.Sum64()
 
 			checksumsMu.Lock()
 			defer checksumsMu.Unlock()
-			checksums[path] = sum
+			checksums[buffer.Name()] = sum
 			prog.SetDone(len(checksums))
 			return nil
 		})
 	}
 
 	prog.SetMessage("verifying snapshots for disk " + d.ID)
-	prog.SetTotal(int64(len(dirs)))
+	prog.SetTotal(int64(len(buffers)))
 	prog.SetDone(0)
 
 	if err := eg.Wait(); err != nil {
@@ -145,21 +143,16 @@ func (d *Disk) updateSnapshotsHelper(outbuffers []buffers.CompressedBufferHandle
 	var closers []io.Closer
 	for _, buf := range outbuffers {
 		writer, err := buf.GetRaw().GetWriter() // Get the raw writer to avoid double compression
+		closers = append(closers, writer)
+		defer writer.Close()
 		if err != nil {
 			return snapshot.SnapshotStats{}, fmt.Errorf("get snapshot writer %q: %w", buf.Name(), err)
 		}
 		writers = append(writers, writer)
-		closers = append(closers, writer)
 	}
-	multiwriter := ioutil.WithWriterCloser(ioutil.ParallelMultiWriter(writers...), func() error {
-		var err error
-		for _, closer := range closers {
-			if e := closer.Close(); e != nil {
-				err = e
-			}
-		}
-		return err
-	})
+	// Create a multiwriter that writes to all writers
+	// and closes the underlying writers when closed.
+	multiwriter := ioutil.ParallelMultiWriter(writers...)
 
 	zstdWriter, err := zstd.NewWriter(multiwriter,
 		zstd.WithEncoderCRC(true),
@@ -181,15 +174,8 @@ func (d *Disk) updateSnapshotsHelper(outbuffers []buffers.CompressedBufferHandle
 	}
 
 	// Close all pipe writers underlying the multiwriter
-	for _, closer := range closers {
-		if err := closer.Close(); err != nil {
-			return stats, fmt.Errorf("close pipe writer: %w", err)
-		}
-	}
-
-	// Wait for all snapshot writes to complete
-	if err := eg.Wait(); err != nil {
-		return stats, fmt.Errorf("wait for snapshot writes: %w", err)
+	if err := ioutil.NewMultiCloser(closers...).Close(); err != nil {
+		return stats, fmt.Errorf("close snapshot writers: %w", err)
 	}
 
 	return stats, nil
@@ -274,9 +260,9 @@ func (d *Disk) loadAllocationMap(snapshotBuf buffers.CompressedBufferHandle) (*b
 			return nil, fmt.Errorf("iterate snapshot entries: %w", err)
 		}
 
-		for i := 0; i < len(entry.SliceRangeStarts) && i < len(entry.SliceRangeEnds); i++ {
-			start := entry.SliceRangeStarts[i]
-			end := entry.SliceRangeEnds[i]
+		for i := 0; i < len(entry.StripeRangeStarts) && i < len(entry.StripeRangeEnds); i++ {
+			start := entry.StripeRangeStarts[i]
+			end := entry.StripeRangeEnds[i]
 			if !rangealloc.SetAllocated(int64(start), int64(end), struct{}{}) {
 				return nil, fmt.Errorf("block range overlap detected for file %s at offset %d length %d", entry.Path, start, end)
 			}

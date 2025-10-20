@@ -14,10 +14,10 @@ import (
 // and release resources.
 func ParallelMultiWriter(writers ...io.Writer) io.WriteCloser {
 	if len(writers) == 0 {
-		return WithWriterCloser(io.Discard, func() error { return nil })
+		return WriterWithCloser(io.Discard, NewMultiCloser())
 	}
 	if len(writers) == 1 {
-		return WithBufferedWrites(writers[0])
+		return WriterWithCloser(writers[0], NewMultiCloser())
 	}
 
 	var eg errgroup.Group
@@ -38,16 +38,8 @@ func ParallelMultiWriter(writers ...io.Writer) io.WriteCloser {
 	}
 
 	multiwriter := io.MultiWriter(pipeWriters...)
-	return WithBufferedWrites(WithWriterCloser(multiwriter, func() error {
-		var err error
-		for _, w := range pipeClosers {
-			if e := w.Close(); e != nil {
-				err = e
-			}
-		}
-		if e := eg.Wait(); e != nil {
-			err = e
-		}
-		return err
-	}))
+	closer := NewMultiCloser(pipeClosers...)
+	return WithBufferedWrites(
+		WriterWithCloser(multiwriter, closer),
+	)
 }

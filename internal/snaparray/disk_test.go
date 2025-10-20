@@ -1,13 +1,12 @@
 package snaparray
 
 import (
-	"os"
 	"testing"
 
+	"github.com/garethgeorge/gosnapraid/internal/buffers"
 	"github.com/garethgeorge/gosnapraid/internal/progress"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot/testutil"
-	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,10 +16,10 @@ func TestDisk_UpdateAndVerifySnapshots(t *testing.T) {
 	fsConfig := testutil.DefaultTreeConfig()
 	fakeFS := testutil.GenerateMapFS(fsConfig)
 
-	// 2. Create two temporary directories for snapshots
-	dir1 := t.TempDir()
-	dir2 := t.TempDir()
-	dirs := []string{dir1, dir2}
+	// 2. Create two in-memory buffers for snapshots
+	buf1 := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	buf2 := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	outbuffers := []buffers.CompressedBufferHandle{buf1, buf2}
 
 	// 3. Create a Disk instance
 	d := &Disk{
@@ -30,75 +29,70 @@ func TestDisk_UpdateAndVerifySnapshots(t *testing.T) {
 
 	// 4. Update snapshots
 	spinnerProg := progress.NoopSpinnerProgressTracker{}
-	stats, finalize, err := d.updateSnapshots(dirs, "", spinnerProg)
+	stats, err := d.updateSnapshotsHelper(outbuffers, nil, spinnerProg)
 	require.NoError(t, err)
-	require.NotNil(t, finalize)
 
 	expectedEntries := testutil.CountExpectedEntries(fsConfig)
 	assert.Equal(t, expectedEntries, stats.NewOrModified)
 	assert.Equal(t, 0, stats.Unchanged)
 	assert.Equal(t, 0, stats.Errors)
 
-	err = finalize()
-	require.NoError(t, err)
-
 	// 5. Verify snapshots
 	barProg := progress.NoopBarProgressTracker{}
-	verifiedPath, err := d.verifySnapshots(dirs, barProg)
+	verifiedPath, err := d.verifySnapshots(outbuffers, barProg)
 	require.NoError(t, err)
 	require.NotEmpty(t, verifiedPath)
 
 	// 6. Assert that the path is one of the expected snapshot paths
-	snapPath1 := d.snapshotPath(dir1)
-	snapPath2 := d.snapshotPath(dir2)
-	assert.Contains(t, []string{snapPath1, snapPath2}, verifiedPath)
+	assert.Contains(t, []string{buf1.Name(), buf2.Name()}, verifiedPath)
 
 	// 7. Read back the verified snapshot and check its contents
-	f, err := os.Open(verifiedPath)
-	require.NoError(t, err)
-	defer f.Close()
+	// Find the buffer that corresponds to the verified path
+	var verifiedBuf buffers.CompressedBufferHandle
+	for _, buf := range outbuffers {
+		if buf.Name() == verifiedPath {
+			verifiedBuf = buf
+			break
+		}
+	}
+	require.NotNil(t, verifiedBuf)
 
-	zstdReader, err := zstd.NewReader(f)
+	reader, err := verifiedBuf.GetReader()
 	require.NoError(t, err)
-	defer zstdReader.Close()
+	defer reader.Close()
 
-	snapReader, header, err := snapshot.NewSnapshotReader(zstdReader)
+	snapReader, header, err := snapshot.NewSnapshotReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, snapReader)
 	assert.Equal(t, uint32(Version), header.Version)
 
 	// Count files in the snapshot and compare with the source filesystem
 	count := 0
-	for _, err := range snapReader.Iter() {
+	for entry, err := range snapReader.Iter() {
 		require.NoError(t, err)
-		count++
+		if entry != nil {
+			count++
+		}
 	}
 	assert.Equal(t, expectedEntries, count)
 }
 
 func TestDisk_VerifySnapshots_Mismatch(t *testing.T) {
-	// 1. Create two temporary directories
-	dir1 := t.TempDir()
-	dir2 := t.TempDir()
-	dirs := []string{dir1, dir2}
-
-	// 2. Create a Disk instance
+	// 1. Create a Disk instance
 	d := &Disk{ID: "testdisk"}
 
-	// 3. Create two different snapshot files
-	snapPath1 := d.snapshotPath(dir1)
-	err := os.WriteFile(snapPath1, []byte("snapshot1"), 0644)
-	require.NoError(t, err)
+	// 2. Create two different snapshot buffers
+	rawBuf1 := buffers.InMemoryBufferHandle([]byte("snapshot1"))
+	compBuf1 := buffers.CreateCompressedHandle(rawBuf1)
 
-	snapPath2 := d.snapshotPath(dir2)
-	err = os.WriteFile(snapPath2, []byte("snapshot2"), 0644)
-	require.NoError(t, err)
+	rawBuf2 := buffers.InMemoryBufferHandle([]byte("snapshot2"))
+	compBuf2 := buffers.CreateCompressedHandle(rawBuf2)
 
-	// 4. Verify snapshots
+	// 3. Verify snapshots
 	barProg := progress.NoopBarProgressTracker{}
-	_, err = d.verifySnapshots(dirs, barProg)
+	_, err := d.verifySnapshots([]buffers.CompressedBufferHandle{compBuf1, compBuf2}, barProg)
 
-	// 5. Assert that an error is returned
+	// 4. Assert that an error is returned
 	require.Error(t, err)
 	var errMap *ErrorMap
 	require.ErrorAs(t, err, &errMap)
@@ -111,87 +105,81 @@ func TestDisk_UpdateAndVerifySnapshots_WithPrior(t *testing.T) {
 	priorFsConfig.FilesPerDir = 5
 	priorFS := testutil.GenerateMapFS(priorFsConfig)
 
-	// 2. Create a temporary directory for the prior snapshot
-	priorDir := t.TempDir()
-
-	// 3. Create a Disk instance for the prior snapshot
+	// 2. Create a Disk instance for the prior snapshot
 	priorDisk := &Disk{
 		ID: "testdisk",
 		FS: priorFS,
 	}
 
-	// 4. Create the prior snapshot
+	// 3. Create the prior snapshot in an in-memory buffer
 	spinnerProg := progress.NoopSpinnerProgressTracker{}
-	priorStats, finalizePrior, err := priorDisk.updateSnapshots([]string{priorDir}, "", spinnerProg)
+	priorBuf := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	priorStats, err := priorDisk.updateSnapshotsHelper([]buffers.CompressedBufferHandle{priorBuf}, nil, spinnerProg)
 	require.NoError(t, err)
-	require.NotNil(t, finalizePrior)
 
 	priorExpectedEntries := testutil.CountExpectedEntries(priorFsConfig)
 	assert.Equal(t, priorExpectedEntries, priorStats.NewOrModified)
 	assert.Equal(t, 0, priorStats.Unchanged)
 
-	err = finalizePrior()
-	require.NoError(t, err)
-	priorSnapshotPath := priorDisk.snapshotPath(priorDir)
-
-	// 5. Create a new fake filesystem with more files
+	// 4. Create a new fake filesystem with more files
 	updatedFsConfig := testutil.DefaultTreeConfig()
 	updatedFsConfig.FilesPerDir = 10
 	updatedFS := testutil.GenerateMapFS(updatedFsConfig)
 
-	// 6. Create two temporary directories for the new snapshots
-	dir1 := t.TempDir()
-	dir2 := t.TempDir()
-	dirs := []string{dir1, dir2}
+	// 5. Create two in-memory buffers for the new snapshots
+	buf1 := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	buf2 := buffers.CreateCompressedHandle(buffers.InMemoryBufferHandle(nil))
+	outbuffers := []buffers.CompressedBufferHandle{buf1, buf2}
 
-	// 7. Create a new Disk instance with the updated filesystem
+	// 6. Create a new Disk instance with the updated filesystem
 	d := &Disk{
 		ID: "testdisk",
 		FS: updatedFS,
 	}
 
-	// 8. Update snapshots using the prior snapshot
-	stats, finalize, err := d.updateSnapshots(dirs, priorSnapshotPath, spinnerProg)
+	// 7. Update snapshots using the prior snapshot
+	stats, err := d.updateSnapshotsHelper(outbuffers, priorBuf, spinnerProg)
 	require.NoError(t, err)
-	require.NotNil(t, finalize)
 
 	updatedExpectedEntries := testutil.CountExpectedEntries(updatedFsConfig)
 	assert.Equal(t, updatedExpectedEntries-priorExpectedEntries, stats.NewOrModified)
 	assert.Equal(t, priorExpectedEntries, stats.Unchanged)
 
-	err = finalize()
-	require.NoError(t, err)
-
-	// 9. Verify snapshots
+	// 8. Verify snapshots
 	barProg := progress.NoopBarProgressTracker{}
-	verifiedPath, err := d.verifySnapshots(dirs, barProg)
+	verifiedPath, err := d.verifySnapshots(outbuffers, barProg)
 	require.NoError(t, err)
 	require.NotEmpty(t, verifiedPath)
 
-	// 10. Assert that the path is one of the expected snapshot paths
-	snapPath1 := d.snapshotPath(dir1)
-	snapPath2 := d.snapshotPath(dir2)
-	assert.Contains(t, []string{snapPath1, snapPath2}, verifiedPath)
+	// 9. Assert that the path is one of the expected snapshot paths
+	assert.Contains(t, []string{buf1.Name(), buf2.Name()}, verifiedPath)
 
-	// 11. Read back the verified snapshot and check its contents
-	f, err := os.Open(verifiedPath)
+	// 10. Read back the verified snapshot and check its contents
+	var verifiedBuf buffers.CompressedBufferHandle
+	for _, buf := range outbuffers {
+		if buf.Name() == verifiedPath {
+			verifiedBuf = buf
+			break
+		}
+	}
+	require.NotNil(t, verifiedBuf)
+
+	reader, err := verifiedBuf.GetReader()
 	require.NoError(t, err)
-	defer f.Close()
+	defer reader.Close()
 
-	zstdReader, err := zstd.NewReader(f)
-	require.NoError(t, err)
-	defer zstdReader.Close()
-
-	snapReader, header, err := snapshot.NewSnapshotReader(zstdReader)
+	snapReader, header, err := snapshot.NewSnapshotReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, snapReader)
 	assert.Equal(t, uint32(Version), header.Version)
 
 	// Count files in the snapshot and compare with the source filesystem
 	count := 0
-	for _, err := range snapReader.Iter() {
+	for entry, err := range snapReader.Iter() {
 		require.NoError(t, err)
-		count++
+		if entry != nil {
+			count++
+		}
 	}
 	assert.Equal(t, updatedExpectedEntries, count)
 }

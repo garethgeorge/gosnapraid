@@ -37,7 +37,7 @@ message SnapshotNode {
   fixed64 hashhi = 6;
   fixed64 hashlo = 7;
 
-  // Fields for slice range tracking
-  repeated uint64 slice_range_starts = 8;
-  repeated uint64 slice_range_ends = 9;
+  // Fields for stripe range tracking
+  repeated uint64 stripe_range_starts = 8; // inclusive
+  repeated uint64 stripe_range_ends = 9; // exclusive
 }

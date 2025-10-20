@@ -213,15 +213,15 @@ func TestUseMoveDetection_BasicMove(t *testing.T) {
 		require.NoError(t, err)
 		// Make a shallow copy without copying the mutex
 		nodeCopy := &gosnapraidpb.SnapshotNode{
-			Path:             node.Path,
-			Size:             node.Size,
-			Mtime:            node.Mtime,
-			Mode:             node.Mode,
-			Hashtype:         node.Hashtype,
-			Hashhi:           node.Hashhi,
-			Hashlo:           node.Hashlo,
-			SliceRangeStarts: node.SliceRangeStarts,
-			SliceRangeEnds:   node.SliceRangeEnds,
+			Path:              node.Path,
+			Size:              node.Size,
+			Mtime:             node.Mtime,
+			Mode:              node.Mode,
+			Hashtype:          node.Hashtype,
+			Hashhi:            node.Hashhi,
+			Hashlo:            node.Hashlo,
+			StripeRangeStarts: node.StripeRangeStarts,
+			StripeRangeEnds:   node.StripeRangeEnds,
 		}
 		nodes = append(nodes, nodeCopy)
 	}
@@ -483,9 +483,9 @@ func TestUseMoveDetection_InvalidSliceRanges(t *testing.T) {
 
 	// Write a node with mismatched slice ranges
 	node := &gosnapraidpb.SnapshotNode{
-		Path:             "file.txt",
-		SliceRangeStarts: []uint64{0, 100},
-		SliceRangeEnds:   []uint64{100}, // Mismatched length!
+		Path:              "file.txt",
+		StripeRangeStarts: []uint64{0, 100},
+		StripeRangeEnds:   []uint64{100}, // Mismatched length!
 	}
 	err = writer.Write(node)
 	require.NoError(t, err)
@@ -497,7 +497,7 @@ func TestUseMoveDetection_InvalidSliceRanges(t *testing.T) {
 	snapshotter := NewSnapshotter(fstest.MapFS{})
 	err = snapshotter.UseMoveDetection(reader)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid slice ranges")
+	assert.Contains(t, err.Error(), "invalid stripe ranges")
 }
 
 func TestDedupeTree_Ordering(t *testing.T) {

@@ -50,8 +50,8 @@ func (s *Snapshotter) UseMoveDetection(oldSnapshot *SnapshotReader) error {
 		if err != nil {
 			return fmt.Errorf("reading old snapshot: %w", err)
 		}
-		if len(node.SliceRangeStarts) != len(node.SliceRangeEnds) {
-			return fmt.Errorf("invalid slice ranges for file %q", node.Path)
+		if len(node.StripeRangeStarts) != len(node.StripeRangeEnds) {
+			return fmt.Errorf("invalid stripe ranges for file %q", node.Path)
 		}
 
 		// Only add regular files to the dedupe tree (directories don't have meaningful hashes)
@@ -60,26 +60,25 @@ func (s *Snapshotter) UseMoveDetection(oldSnapshot *SnapshotReader) error {
 		}
 
 		// Start a new block if there isn't enough capacity for this set of ranges.
-		if len(rangeStartBlock)+len(node.SliceRangeStarts) > cap(rangeStartBlock) {
+		if len(rangeStartBlock)+len(node.StripeRangeStarts) > cap(rangeStartBlock) {
 			newBlockSize := 16 * 1024
-			if len(node.SliceRangeStarts) > newBlockSize {
-				newBlockSize = len(node.SliceRangeStarts)
+			if len(node.StripeRangeStarts) > newBlockSize {
+				newBlockSize = len(node.StripeRangeStarts)
 			}
 			rangeStartBlock = make([]uint64, 0, newBlockSize)
 		}
-		if len(rangeEndBlock)+len(node.SliceRangeEnds) > cap(rangeEndBlock) {
+		if len(rangeEndBlock)+len(node.StripeRangeEnds) > cap(rangeEndBlock) {
 			newBlockSize := 16 * 1024
-			if len(node.SliceRangeEnds) > newBlockSize {
-				newBlockSize = len(node.SliceRangeEnds)
+			if len(node.StripeRangeEnds) > newBlockSize {
+				newBlockSize = len(node.StripeRangeEnds)
 			}
 			rangeEndBlock = make([]uint64, 0, newBlockSize)
 		}
-
 		sliceStart := len(rangeStartBlock)
-		rangeStartBlock = append(rangeStartBlock, node.SliceRangeStarts...)
+		rangeStartBlock = append(rangeStartBlock, node.StripeRangeStarts...)
 		sliceEnd := len(rangeStartBlock)
 		sliceStart2 := len(rangeEndBlock)
-		rangeEndBlock = append(rangeEndBlock, node.SliceRangeEnds...)
+		rangeEndBlock = append(rangeEndBlock, node.StripeRangeEnds...)
 		sliceEnd2 := len(rangeEndBlock)
 
 		// Insert into dedupe tree
@@ -150,8 +149,8 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 			node.Hashtype = oldSnapshotItem.Value.Hashtype
 			node.Hashhi = oldSnapshotItem.Value.Hashhi
 			node.Hashlo = oldSnapshotItem.Value.Hashlo
-			node.SliceRangeEnds = oldSnapshotItem.Value.SliceRangeEnds
-			node.SliceRangeStarts = oldSnapshotItem.Value.SliceRangeStarts
+			node.StripeRangeStarts = oldSnapshotItem.Value.StripeRangeStarts
+			node.StripeRangeEnds = oldSnapshotItem.Value.StripeRangeEnds
 			stats.Unchanged++
 		} else {
 			// New or changed file, if it's an ordinary file try to read it and populate the hash
@@ -168,9 +167,9 @@ func (s *Snapshotter) Create(writer *SnapshotWriter, oldSnapshot *SnapshotReader
 						hashlo: node.Hashlo,
 						hashhi: node.Hashhi,
 					}); found {
-						// Found existing file with same hash, reuse its slice ranges
-						node.SliceRangeStarts = existing.sliceStarts
-						node.SliceRangeEnds = existing.sliceEnds
+						// Found existing file with same hash, reuse its stripe ranges
+						node.StripeRangeStarts = existing.sliceStarts
+						node.StripeRangeEnds = existing.sliceEnds
 						stats.MovedOrDeduped++
 					}
 				}
