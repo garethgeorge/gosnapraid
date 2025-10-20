@@ -8,15 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/garethgeorge/gosnapraid/internal/blockmap"
 	"github.com/garethgeorge/gosnapraid/internal/buffers"
 	"github.com/garethgeorge/gosnapraid/internal/ioutil"
 	"github.com/garethgeorge/gosnapraid/internal/progress"
 	"github.com/garethgeorge/gosnapraid/internal/snapshot"
-	gosnapraidpb "github.com/garethgeorge/gosnapraid/proto/gosnapraid"
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sync/errgroup"
 )
@@ -181,93 +178,9 @@ func (d *Disk) updateSnapshotsHelper(outbuffers []buffers.CompressedBufferHandle
 	return stats, nil
 }
 
-func (d *Disk) writeSnapshotHelper(writer io.Writer, prior buffers.BufferHandle) (snapshot.SnapshotStats, error) {
+func (d *Disk) writeSnapshotHelper(newSnapshot buffers.BufferHandle, prior buffers.BufferHandle) (snapshot.SnapshotStats, error) {
 	// create snapshotter
-	snapshotter := snapshot.NewSnapshotter(d.FS)
-
-	// create snapshot writer
-	snapshotWriter, err := snapshot.NewSnapshotWriter(writer, &gosnapraidpb.SnapshotHeader{
-		Version:   Version,
-		Timestamp: uint64(time.Now().UnixNano()),
-	})
-	if err != nil {
-		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot writer: %w", err)
-	}
-
-	// reopen prior snapshot and populate dedupe tree
-	if prior != nil {
-		priorReadCloser, err := prior.GetReader()
-		if err != nil {
-			return snapshot.SnapshotStats{}, fmt.Errorf("get prior snapshot reader: %w", err)
-		}
-		defer priorReadCloser.Close()
-		reader, header, err := snapshot.NewSnapshotReader(priorReadCloser)
-		if err != nil {
-			return snapshot.SnapshotStats{}, fmt.Errorf("open prior snapshot: %w", err)
-		}
-		if header.Version != Version {
-			return snapshot.SnapshotStats{}, fmt.Errorf("prior snapshot version %d does not match current version %d", header.Version, Version)
-		}
-		err = snapshotter.UseMoveDetection(reader)
-		if err != nil {
-			return snapshot.SnapshotStats{}, fmt.Errorf("enable move detection: %w", err)
-		}
-		priorReadCloser.Close()
-	}
-
-	// open prior snapshot for the diffing scan
-	var priorSnapshot *snapshot.SnapshotReader
-	if prior != nil {
-		priorReadCloser, err := prior.GetReader()
-		if err != nil {
-			return snapshot.SnapshotStats{}, fmt.Errorf("get prior snapshot reader: %w", err)
-		}
-		defer priorReadCloser.Close()
-		reader, _, err := snapshot.NewSnapshotReader(priorReadCloser)
-		if err != nil {
-			return snapshot.SnapshotStats{}, fmt.Errorf("open prior snapshot: %w", err)
-		}
-		priorSnapshot = reader
-	}
-
-	// create the snapshot
-	stats, err := snapshotter.Create(snapshotWriter, priorSnapshot)
-	if err != nil {
-		return snapshot.SnapshotStats{}, fmt.Errorf("create snapshot: %w", err)
-	}
+	snapshotter := snapshot.NewSnapshotter(d.FS, newSnapshot, prior)
 
 	return stats, nil
-}
-
-func (d *Disk) loadAllocationMap(snapshotBuf buffers.CompressedBufferHandle) (*blockmap.RangeAllocator[struct{}], error) {
-	reader, err := snapshotBuf.GetReader()
-	if err != nil {
-		return nil, fmt.Errorf("get snapshot reader: %w", err)
-	}
-	defer reader.Close()
-
-	snapshotReader, header, err := snapshot.NewSnapshotReader(reader)
-	if err != nil {
-		return nil, fmt.Errorf("open snapshot reader: %w", err)
-	}
-	if header.Version != Version {
-		return nil, fmt.Errorf("snapshot version %d does not match expected version %d", header.Version, Version)
-	}
-
-	rangealloc := blockmap.NewRangeAllocator[struct{}](0, 1<<63-1) // Use max int64 as upper bound
-	for entry, err := range snapshotReader.Iter() {
-		if err != nil {
-			return nil, fmt.Errorf("iterate snapshot entries: %w", err)
-		}
-
-		for i := 0; i < len(entry.StripeRangeStarts) && i < len(entry.StripeRangeEnds); i++ {
-			start := entry.StripeRangeStarts[i]
-			end := entry.StripeRangeEnds[i]
-			if !rangealloc.SetAllocated(int64(start), int64(end), struct{}{}) {
-				return nil, fmt.Errorf("block range overlap detected for file %s at offset %d length %d", entry.Path, start, end)
-			}
-		}
-	}
-
-	return rangealloc, nil
 }

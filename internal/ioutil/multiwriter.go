@@ -1,6 +1,7 @@
 package ioutil
 
 import (
+	"bufio"
 	"io"
 
 	"golang.org/x/sync/errgroup"
@@ -36,8 +37,10 @@ func ParallelMultiWriter(writers ...io.Writer) io.WriteCloser {
 			}
 		}(w, pr))
 	}
-
-	multiwriter := WithBufferedWrites(io.MultiWriter(pipeWriters...))
-	pipeClosers = append(pipeClosers, multiwriter)
-	return WriterWithCloser(multiwriter, NewMultiCloser(pipeClosers...))
+	bufioWriter := bufio.NewWriterSize(io.MultiWriter(pipeWriters...), DefaultBufioSize)
+	var allClosers = []io.Closer{}
+	allClosers = append(allClosers, CloserFunc(bufioWriter.Flush))
+	allClosers = append(allClosers, pipeClosers...)
+	allClosers = append(allClosers, CloserFunc(eg.Wait))
+	return WriterWithCloser(bufioWriter, NewMultiCloser(allClosers...))
 }

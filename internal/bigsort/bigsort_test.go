@@ -347,6 +347,7 @@ func (h *errorBufferHandle) GetWriter() (io.WriteCloser, error) {
 func (h *errorBufferHandle) GetReader() (io.ReadCloser, error) {
 	return &errorReadWriteCloser{readErr: h.readErr}, nil
 }
+func (h *errorBufferHandle) Name() string { return "errorBufferHandle" }
 
 type errorReadWriteCloser struct {
 	writeErr bool
