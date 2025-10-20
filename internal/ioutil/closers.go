@@ -32,9 +32,6 @@ type writeCloser struct {
 var _ io.WriteCloser = (*writeCloser)(nil)
 
 func WriterWithCloser(w io.Writer, c io.Closer) io.WriteCloser {
-	if _, ok := w.(io.WriteCloser); ok {
-		panic("WriterWithCloser: writer is already a WriteCloser")
-	}
 	return &writeCloser{
 		Writer: w,
 		Closer: c,

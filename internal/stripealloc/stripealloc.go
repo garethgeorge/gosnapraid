@@ -2,6 +2,7 @@ package stripealloc
 
 import (
 	"fmt"
+	"iter"
 
 	"github.com/google/btree"
 )
@@ -58,7 +59,7 @@ func (s *StripeAllocator) findContainingFreeRange(r Range) (Range, bool) {
 	var containingFreeRange Range
 	var found bool
 	s.FreeList.DescendLessOrEqual(Range{Start: r.Start}, func(item Range) bool {
-		if item.End >= r.End {
+		if item.Contains(r) {
 			containingFreeRange = item
 			found = true
 		}
@@ -303,4 +304,23 @@ func (s *StripeAllocator) ShrinkToFit() error {
 	}
 
 	return s.ResizeTo(lastAllocatedOffset + 1)
+}
+
+// IterAllocs returns an iterator over the allocated ranges.
+func (s *StripeAllocator) IterAllocs() iter.Seq[Range] {
+	return func(yield func(Range) bool) {
+		var current uint64
+		s.FreeList.Ascend(func(freeRange Range) bool {
+			if freeRange.Start > current {
+				if !yield(Range{Start: current, End: freeRange.Start}) {
+					return false
+				}
+			}
+			current = freeRange.End
+			return true
+		})
+		if current < s.TotalCapacity {
+			yield(Range{Start: current, End: s.TotalCapacity})
+		}
+	}
 }

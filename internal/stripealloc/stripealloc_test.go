@@ -121,6 +121,120 @@ func TestStripeAllocator_MultiAllocate(t *testing.T) {
 	assert.Equal(t, uint64(150), s.AvailableCapacity)
 }
 
+func TestStripeAllocator_IterAllocs(t *testing.T) {
+	testCases := []struct {
+		name           string
+		capacity       uint64
+		allocations    []Range
+		expectedAllocs []Range
+	}{
+		{
+			name:           "fully free",
+			capacity:       1000,
+			allocations:    []Range{},
+			expectedAllocs: []Range{},
+		},
+		{
+			name:     "fully allocated",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 0, End: 1000},
+			},
+			expectedAllocs: []Range{
+				{Start: 0, End: 1000},
+			},
+		},
+		{
+			name:     "one allocation at start",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 0, End: 100},
+			},
+			expectedAllocs: []Range{
+				{Start: 0, End: 100},
+			},
+		},
+		{
+			name:     "one allocation in middle",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 100, End: 200},
+			},
+			expectedAllocs: []Range{
+				{Start: 100, End: 200},
+			},
+		},
+		{
+			name:     "one allocation at end",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 900, End: 1000},
+			},
+			expectedAllocs: []Range{
+				{Start: 900, End: 1000},
+			},
+		},
+		{
+			name:     "multiple allocations",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 100, End: 200},
+				{Start: 400, End: 500},
+			},
+			expectedAllocs: []Range{
+				{Start: 100, End: 200},
+				{Start: 400, End: 500},
+			},
+		},
+		{
+			name:     "allocations touching",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 100, End: 200},
+				{Start: 200, End: 300},
+			},
+			expectedAllocs: []Range{
+				{Start: 100, End: 300},
+			},
+		},
+		{
+			name:     "allocations at boundaries",
+			capacity: 1000,
+			allocations: []Range{
+				{Start: 0, End: 100},
+				{Start: 900, End: 1000},
+			},
+			expectedAllocs: []Range{
+				{Start: 0, End: 100},
+				{Start: 900, End: 1000},
+			},
+		},
+		{
+			name:           "zero capacity",
+			capacity:       0,
+			allocations:    []Range{},
+			expectedAllocs: []Range{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStripeAllocator(tc.capacity)
+			if len(tc.allocations) > 0 {
+				err := s.MarkAllocated(tc.allocations...)
+				require.NoError(t, err)
+			}
+
+			gotAllocs := []Range{}
+			for r := range s.IterAllocs() {
+				gotAllocs = append(gotAllocs, r)
+			}
+
+			assert.Equal(t, tc.expectedAllocs, gotAllocs)
+		})
+	}
+}
+
 // --- Fuzz Test ---
 
 type simpleAllocatorModel struct {

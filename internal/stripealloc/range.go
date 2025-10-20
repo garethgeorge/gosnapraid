@@ -21,6 +21,10 @@ func (r Range) Overlaps(other Range) bool {
 	return r.Start < other.End && other.Start < r.End
 }
 
+func (r Range) Contains(other Range) bool {
+	return r.Start <= other.Start && r.End >= other.End
+}
+
 func (r Range) Adjacent(other Range) bool {
 	return r.End == other.Start || other.End == r.Start
 }

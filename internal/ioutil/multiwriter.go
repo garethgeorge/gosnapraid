@@ -37,9 +37,7 @@ func ParallelMultiWriter(writers ...io.Writer) io.WriteCloser {
 		}(w, pr))
 	}
 
-	multiwriter := io.MultiWriter(pipeWriters...)
-	closer := NewMultiCloser(pipeClosers...)
-	return WithBufferedWrites(
-		WriterWithCloser(multiwriter, closer),
-	)
+	multiwriter := WithBufferedWrites(io.MultiWriter(pipeWriters...))
+	pipeClosers = append(pipeClosers, multiwriter)
+	return WriterWithCloser(multiwriter, NewMultiCloser(pipeClosers...))
 }
