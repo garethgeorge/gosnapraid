@@ -3,6 +3,7 @@ package testutil
 import (
 	"fmt"
 	"io/fs"
+	"math/rand"
 	"path"
 	"testing/fstest"
 	"time"
@@ -174,4 +175,9 @@ func CountExpectedDirs(config TreeConfig) int {
 // CountExpectedEntries calculates the total number of entries (files + directories).
 func CountExpectedEntries(config TreeConfig) int {
 	return CountExpectedFiles(config) + CountExpectedDirs(config)
+}
+
+// NewSeededRNG creates a new random number generator with the given seed.
+func NewSeededRNG(seed int64) *rand.Rand {
+	return rand.New(rand.NewSource(seed))
 }

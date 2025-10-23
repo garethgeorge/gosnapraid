@@ -1,8 +1,11 @@
 package snapshot
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -243,6 +246,185 @@ func TestUpdateHashesLoadingAllocations(t *testing.T) {
 		t.Errorf("Expected allocated ranges %v, got %v", ranges, allocatedRanges)
 	}
 	t.Logf("Allocated ranges: %v", allocatedRanges)
+}
+
+func FuzzUpdateHashesLoadingAllocations(f *testing.F) {
+	// Add seed corpus
+	f.Add(int64(12345), 0.5, uint64(1000))
+	f.Add(int64(67890), 0.1, uint64(10000))
+	f.Add(int64(11111), 0.9, uint64(500))
+	f.Add(int64(99999), 0.0, uint64(100))
+	f.Add(int64(55555), 1.0, uint64(5000))
+
+	f.Fuzz(func(t *testing.T, seed int64, allocFraction float64, rangeSize uint64) {
+		// Validate inputs
+		if allocFraction < 0 || allocFraction > 1 {
+			t.Skip("allocFraction must be between 0 and 1")
+		}
+		if rangeSize < 100 || rangeSize > 10000 {
+			t.Skip("rangeSize must be between 100 and 10000")
+		}
+
+		// Use seed for reproducible randomness
+		rng := testutil.NewSeededRNG(seed)
+
+		// Subdivide the range into random subslices
+		type allocInfo struct {
+			rng       stripealloc.Range
+			allocated bool
+			path      string
+		}
+
+		var allocs []allocInfo
+		currentPos := uint64(0)
+
+		for currentPos < rangeSize {
+			// Random slice length from 1 to 100
+			sliceLen := uint64(rng.Intn(100) + 1)
+			if currentPos+sliceLen > rangeSize {
+				sliceLen = rangeSize - currentPos
+			}
+
+			// Randomly decide if this slice should be allocated
+			shouldAllocate := rng.Float64() < allocFraction
+
+			// Generate a random 32-byte hex string for the path
+			randomBytes := make([]byte, 32)
+			if _, err := rand.Read(randomBytes); err != nil {
+				t.Fatalf("Failed to generate random path: %v", err)
+			}
+			randomPath := hex.EncodeToString(randomBytes)
+
+			allocs = append(allocs, allocInfo{
+				rng: stripealloc.Range{
+					Start: currentPos,
+					End:   currentPos + sliceLen,
+				},
+				allocated: shouldAllocate,
+				path:      randomPath,
+			})
+
+			currentPos += sliceLen
+		}
+
+		// Sort by path (lexicographic order)
+		sort.Slice(allocs, func(i, j int) bool {
+			return allocs[i].path < allocs[j].path
+		})
+
+		// Create snapshot nodes for allocated ranges
+		snapshotBuf := tempBuf(t)
+		snapshotBufWriter, _ := snapshotBuf.GetWriter()
+		snapshotWriter, err := NewSnapshotWriter(snapshotBufWriter, &gosnapraidpb.SnapshotHeader{
+			Version: Version,
+		})
+		if err != nil {
+			t.Fatalf("Creating snapshot writer: %v", err)
+		}
+
+		// Build mapFS and write snapshot nodes
+		mapFS := make(fstest.MapFS)
+		var expectedAllocatedRanges []stripealloc.Range
+
+		for _, alloc := range allocs {
+			fileData := &fstest.MapFile{
+				Data:    []byte("dummydata"),
+				Mode:    0644,
+				ModTime: time.Now(),
+			}
+			mapFS[alloc.path] = fileData
+
+			node := &gosnapraidpb.SnapshotNode{
+				Path:  alloc.path,
+				Size:  uint64(len(fileData.Data)),
+				Mode:  uint32(fileData.Mode),
+				Mtime: uint64(fileData.ModTime.UnixNano()),
+			}
+
+			// Only add stripe ranges if this allocation is marked as allocated
+			if alloc.allocated {
+				node.StripeRangeStarts = []uint64{alloc.rng.Start}
+				node.StripeRangeEnds = []uint64{alloc.rng.End}
+				expectedAllocatedRanges = append(expectedAllocatedRanges, alloc.rng)
+			}
+
+			err := snapshotWriter.Write(node)
+			if err != nil {
+				t.Fatalf("Writing snapshot node: %v", err)
+			}
+		}
+
+		if err := snapshotBufWriter.Close(); err != nil {
+			t.Fatalf("Closing snapshot writer: %v", err)
+		}
+
+		// Now load the snapshot with a snapshotter and verify allocations
+		snapshotter := NewSnapshotter(mapFS, tempBuf(t), snapshotBuf)
+		stripeAlloc := stripealloc.NewStripeAllocator(rangeSize)
+		dedupeTree := btree.NewG[hashToRange](32, func(a, b hashToRange) bool {
+			return a.hashhi < b.hashhi || (a.hashhi == b.hashhi && a.hashlo < b.hashlo)
+		})
+		stats, err := snapshotter.updateHashesAndMarkAllocations(tempBuf(t), stripeAlloc, dedupeTree, snapshotBuf)
+		if err != nil {
+			t.Fatalf("Updating hashes and loading allocations: %v", err)
+		}
+
+		// Verify stats - all entries should be unchanged since we matched file metadata
+		expectedEntries := len(allocs)
+		if stats.Unchanged != expectedEntries {
+			t.Logf("Stats: %+v", stats)
+			t.Errorf("Expected %d unchanged entries, got %d", expectedEntries, stats.Unchanged)
+		}
+
+		// Verify all expected ranges are marked allocated
+		for _, r := range expectedAllocatedRanges {
+			if stripeAlloc.IsRangeFree(r) {
+				t.Errorf("Expected range %d-%d to be allocated, but it is not", r.Start, r.End)
+			}
+		}
+
+		// Collect all allocated ranges and verify they match expected
+		allocatedRanges := []stripealloc.Range{}
+		for r := range stripeAlloc.IterAllocs() {
+			allocatedRanges = append(allocatedRanges, r)
+		}
+
+		// Sort expectedAllocatedRanges by start position before merging
+		sort.Slice(expectedAllocatedRanges, func(i, j int) bool {
+			return expectedAllocatedRanges[i].Start < expectedAllocatedRanges[j].Start
+		})
+
+		// Merge adjacent ranges in expectedAllocatedRanges to match what the allocator does
+		mergedExpected := mergeAdjacentRanges(expectedAllocatedRanges)
+
+		// Handle nil vs empty slice comparison
+		if len(allocatedRanges) == 0 && len(mergedExpected) == 0 {
+			// Both are empty, test passes
+		} else if !reflect.DeepEqual(allocatedRanges, mergedExpected) {
+			t.Errorf("Expected allocated ranges %v, got %v", mergedExpected, allocatedRanges)
+		}
+	})
+}
+
+// mergeAdjacentRanges merges adjacent ranges in a sorted list of ranges.
+func mergeAdjacentRanges(ranges []stripealloc.Range) []stripealloc.Range {
+	if len(ranges) == 0 {
+		return ranges
+	}
+
+	merged := []stripealloc.Range{ranges[0]}
+	for i := 1; i < len(ranges); i++ {
+		last := &merged[len(merged)-1]
+		current := ranges[i]
+
+		// If current range is adjacent to the last merged range, extend it
+		if last.End == current.Start {
+			last.End = current.End
+		} else {
+			merged = append(merged, current)
+		}
+	}
+	return merged
 }
 
 func BenchmarkCreateSnapshot(b *testing.B) {
